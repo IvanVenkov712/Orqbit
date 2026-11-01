@@ -1,11 +1,12 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl
 
 from dto.jobs import JobStatus
 
 class CreateJobRequest(BaseModel):
+    webhook_url: HttpUrl
     type: str
     payload: dict[str, Any]
 
