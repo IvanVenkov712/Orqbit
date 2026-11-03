@@ -26,13 +26,4 @@ class Settings(BaseSettings):
 
         return value
 
-    @field_validator("lease", "protraction")
-    @classmethod
-    def validate_lease(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError(
-                "lease and protraction must be positive"
-            )
-        return value
-
 settings = Settings()
