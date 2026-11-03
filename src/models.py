@@ -8,7 +8,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class JobStatus(enum.Enum):
     PENDING = "PENDING" # Waiting for a worker
-    pending = "pending"
     RUNNING = "RUNNING" # The worker began working on the job
     SUCCEEDED = "SUCCEEDED" # The worker finished working on the job
     FAILED = "FAILED" # The worker failed finishing the job
