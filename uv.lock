@@ -240,7 +240,6 @@ dependencies = [
     { name = "fastapi" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
-    { name = "ruff" },
     { name = "sqlalchemy" },
     { name = "uvicorn" },
 ]
@@ -248,6 +247,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -256,13 +256,15 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.162.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.7" },
     { name = "pydantic-settings", specifier = ">=2.16.2" },
-    { name = "ruff", specifier = ">=0.17.3" },
     { name = "sqlalchemy", specifier = ">=2.1.6" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.2.0" }]
+dev = [
+    { name = "pytest", specifier = ">=9.2.0" },
+    { name = "ruff", specifier = ">=0.17.3" },
+]
 
 [[package]]
 name = "packaging"
