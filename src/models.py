@@ -1,7 +1,7 @@
 import enum
 from typing import Any
 
-from sqlalchemy import String, Enum
+from sqlalchemy import Enum, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 

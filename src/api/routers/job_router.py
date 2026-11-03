@@ -1,13 +1,10 @@
-from typing import Any
-
 import fastapi
 from fastapi import HTTPException
-from pydantic import BaseModel
 from sqlalchemy import select
 
-from api.dto.jobs import JobRead, JobCreate
+from api.dto.jobs import JobCreate, JobRead
 from database import SessionDep
-from models import JobStatus, Job
+from models import Job
 
 job_router = fastapi.APIRouter()
 
