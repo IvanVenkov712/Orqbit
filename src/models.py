@@ -1,7 +1,8 @@
 import enum
+from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Enum, String
+from sqlalchemy import DATE, DateTime, Enum, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -22,9 +23,22 @@ class Job(Base):
     job_type: Mapped[str] = mapped_column(String(100))
     params: Mapped[dict[str, Any]] = mapped_column(JSONB)
 
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus),
-        default="PENDING",
+        default=JobStatus.PENDING,
     )
 
     result: Mapped[dict[str, Any] | None] = mapped_column(
