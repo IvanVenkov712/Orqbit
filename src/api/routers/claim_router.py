@@ -13,7 +13,7 @@ claim_router = APIRouter()
 @claim_router.post(path="/workers/claim", response_model=JobRead)
 def claim_job(payload: ClaimJob, session: SessionDep):
     stmt = select(Job).where(
-        Job.job_type.in_(payload.supported_types) and
+        Job.job_type.in_(payload.supported_types),
         Job.status == JobStatus.PENDING
     ).order_by(Job.id).limit(1)
 
