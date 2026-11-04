@@ -79,6 +79,10 @@ docker compose --env-file .env.compose down
 
 Your jobs remain in the volume for the next start. Adding `--volumes` to this command **deletes the database volume and every stored job**. Changing the Compose project name or using another checkout directory selects a different project volume by default; continue using the same directory to keep using this database.
 
+## Verification result
+
+Verified on 2026-11-04 from a fresh GitHub clone at commit `0ae6f8b`, using the commands above with API port 18002. Build, migration, and startup succeeded. Job 1 returned identical JSON before and after container recreation. The services were stopped afterward with the database volume retained. No existing environment files, virtual environment, or database were copied into the checkout.
+
 ## Automated verification
 
 The separate `python tests/compose_smoke.py` check is configured in CI. It creates a private Compose project with generated credentials, checks readiness and liveness, tests an actual database outage and recovery, and verifies job persistence after container recreation. It removes only that test project's containers and volume afterward. This automated check requires Python, while the manual Docker workflow above does not.
