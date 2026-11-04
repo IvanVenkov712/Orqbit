@@ -8,6 +8,30 @@ Clients submit jobs through an HTTP API. Independent workers request (pull/claim
 
 This is primarily a **learning and portfolio project**. Prioritize clear architecture, correctness, maintainability, and understandable trade-offs over feature count or production-scale complexity.
 
+## Minimal-change policy
+
+This is a learning project. Make the smallest understandable change that
+satisfies the explicit request.
+
+- Do not treat a task as permission to complete the surrounding milestone.
+- Before editing, briefly list the files you expect to change and why.
+- Prefer 1–3 files. Additional files must be directly necessary for the request.
+- Use existing files and patterns. Do not add layers, helpers, services, or
+  abstractions merely to separate a few lines of code.
+- Add focused tests for the requested behavior. Reuse the existing test setup.
+  Do not create additional smoke scripts or testing infrastructure unless asked.
+- Update one relevant documentation location when needed. Do not synchronize
+  or rewrite README, status, roadmap, and development docs for every change.
+- Do not change CI, Docker, dependencies, or configuration unless the task
+  requires it.
+- Do not include unrelated cleanup, formatting, lint fixes, or refactoring.
+- Mention optional improvements separately instead of implementing them.
+- If scope must expand, explain the concrete necessity before proceeding.
+- When asked for an explanation or review, do not edit files.
+
+Prefer a small, clear solution with stated limitations over a comprehensive
+solution with extra machinery.
+
 ## Current architecture and technology
 
 - **Language:** Python.
