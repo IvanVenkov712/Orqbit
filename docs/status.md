@@ -1,5 +1,7 @@
 # Implementation status
 
+Update on **2026-11-04**: environment-based PostgreSQL settings, locked dependencies, Alembic migrations, canonical statuses, and job timestamps now exist. A PostgreSQL integration suite and GitHub Actions workflow have been added. All 20 integration tests passed locally against PostgreSQL 18.3, and locked installation, Ruff, and syntax checks passed. The workflow has not yet been run on GitHub. See [test setup and coverage](development.md#postgresql-integration-tests). Container orchestration and readiness checks remain unfinished; concurrent claiming and worker ownership remain unsafe. The inventory and verification record below are the historical review and have not been fully refreshed.
+
 Reviewed on **2026-11-03** against the working tree at commit `db293e4`. This is a code-based snapshot, not a production-readiness assessment. Update it when behavior changes.
 
 ## Feature inventory

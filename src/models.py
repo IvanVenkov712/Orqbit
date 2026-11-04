@@ -2,7 +2,7 @@ import enum
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import DATE, DateTime, Enum, String
+from sqlalchemy import DateTime, Enum, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 

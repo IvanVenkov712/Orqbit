@@ -2,7 +2,7 @@
 
 Orqbit is an asynchronous job processing platform: clients submit jobs, and workers pull jobs they know how to execute. The intended design uses PostgreSQL for durable queue state, worker leases, retries, idempotency, and execution history.
 
-**Status: early prototype.** Job submission, retrieval, claiming by type, and success/failure reporting exist. PostgreSQL connectivity, authentication, heartbeats, recovery, retries, idempotency, and attempt history are still planned. Concurrent claiming is currently unsafe. See the [implementation status and known problems](docs/status.md) before running multiple workers.
+**Status: early prototype.** Job submission, retrieval, claiming by type, success/failure reporting, PostgreSQL configuration, and Alembic migrations exist. Authentication, heartbeats, recovery, retries, idempotency, and attempt history are still planned. Concurrent claiming is currently unsafe. See the [implementation status and known problems](docs/status.md) before running multiple workers.
 
 ## Intended capabilities
 
@@ -20,7 +20,7 @@ Orqbit is intended to provide **at-least-once execution**. Workers must make ext
 
 ## Current implementation
 
-The repository uses Python, FastAPI, Pydantic, and synchronous SQLAlchemy sessions. The database URL is currently hard-coded to SQLite. Workers execute application-specific job handlers outside the API process; no worker executable or SDK is included yet.
+The repository uses Python, FastAPI, Pydantic, and synchronous SQLAlchemy sessions with PostgreSQL. Workers execute application-specific job handlers outside the API process; no worker executable or SDK is included yet.
 
 | Method | Route | Behavior today |
 | --- | --- | --- |
@@ -35,17 +35,23 @@ These are prototype routes. They do not authenticate callers or enforce worker o
 
 ## Running the prototype
 
-Setup is not reproducible yet: `pyproject.toml` and `Dockerfile` are empty, and no dependency lock file or Compose configuration exists. The checked local environment uses Python 3.13; a supported Python version has not been declared.
+Use Python 3.13 and uv. With PostgreSQL running and an empty `orqbit` database already created, run from the repository root:
 
-With FastAPI, SQLAlchemy, Pydantic, and Uvicorn already installed in your Python environment, run from the repository root:
-
-```sh
-python -m uvicorn main:app --app-dir src --reload
+```powershell
+uv sync --locked
+Copy-Item .env.example .env
 ```
 
-The server defaults to `http://127.0.0.1:8000`; interactive API documentation is available at `/docs` after startup. Importing the app creates tables and opens or creates `orqbit.db` relative to the working directory. This does not apply schema migrations.
+Edit `.env` with your local PostgreSQL credentials. The example credentials are for local development; supply credentials through the environment in production. The real `.env` is ignored by Git. Then run:
 
-This launch command is provided for exploration, not as a verified clean-install procedure. See [development and verification](docs/development.md) for the current limits and the proposed PostgreSQL/Compose setup.
+```powershell
+uv run --locked alembic upgrade head
+uv run --locked uvicorn main:app --app-dir src --reload
+```
+
+The server defaults to `http://127.0.0.1:8000`; interactive API documentation is available at `/docs`. Importing the app does not create tables; migrations are an explicit step. Container setup remains unfinished.
+
+PostgreSQL integration tests and the GitHub Actions workflow are included. See [development and verification](docs/development.md#postgresql-integration-tests) for test database setup and commands.
 
 ## Documentation
 
