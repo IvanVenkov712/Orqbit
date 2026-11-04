@@ -1,0 +1,17 @@
+# Only application code, migrations, and dependency metadata enter the build.
+# This excludes .env files, credentials, virtual environments, tests, and Git.
+**
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+!alembic.ini
+!src/
+!src/**
+!migrations/
+!migrations/**
+
+# Exclude generated Python files even within the included directories.
+**/__pycache__/
+**/*.pyc
+**/*.pyo

@@ -49,9 +49,46 @@ uv run --locked alembic upgrade head
 uv run --locked uvicorn main:app --app-dir src --reload
 ```
 
-The server defaults to `http://127.0.0.1:8000`; interactive API documentation is available at `/docs`. Importing the app does not create tables; migrations are an explicit step. Container setup remains unfinished.
+The server defaults to `http://127.0.0.1:8000`; interactive API documentation is available at `/docs`. Importing the app does not create tables; migrations are an explicit step.
 
 PostgreSQL integration tests and the GitHub Actions workflow are included. See [development and verification](docs/development.md#postgresql-integration-tests) for test database setup and commands.
+
+## Running with Docker Compose
+
+With Docker running in Linux container mode and Docker Compose v2 or later, copy the local container settings from the repository root:
+
+```powershell
+Copy-Item .env.compose.example .env.compose
+```
+
+Edit `.env.compose` to choose your local database password, updating both `POSTGRES_PASSWORD` and `DATABASE_URL` to match. Use `db` as the database hostname inside Compose. Keep `.env` for running Python on your host; `.env.compose` is a separate, ignored local file. The image contains neither file and has no credential defaults.
+
+Build and start the stack:
+
+```powershell
+docker compose --env-file .env.compose up --build -d
+docker compose --env-file .env.compose ps --all
+docker compose --env-file .env.compose logs migrate
+```
+
+Compose waits for PostgreSQL's health check, runs `alembic upgrade head` in the one-shot `migrate` service, then starts the API. A successful migration container remains exited with code 0. Open `http://127.0.0.1:8000/docs` once the API starts. Set `API_PORT` in `.env.compose` if port 8000 is already in use. PostgreSQL is available only inside the Compose network.
+
+Create a job and read it back in PowerShell:
+
+```powershell
+$job = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/jobs/ -ContentType application/json -Body '{"job_type":"example","params":{"hello":"world"}}'
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/jobs/$($job.id)"
+```
+
+Recreate the containers and read the same job again:
+
+```powershell
+docker compose --env-file .env.compose down
+docker compose --env-file .env.compose up -d
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/jobs/$($job.id)"
+```
+
+The named database volume survives `down`. Adding `--volumes` to `down` deletes the stored jobs. See [container development and verification](docs/development.md#docker-and-compose) for explicit migration commands and the automated smoke check. Application readiness checks are still a separate milestone.
 
 ## Documentation
 
@@ -66,7 +103,7 @@ The status and current API sections describe existing code. Target designs and r
 
 ## Recommended next step
 
-Establish a reproducible PostgreSQL development environment with migrations and CI. Then add authenticated identities and attempt records before implementing atomic claims, lease recovery, and retries. Submission idempotency should ship with the first usable client API. The [roadmap](docs/roadmap.md) gives the full order and release gates.
+Complete database/schema readiness checks for the PostgreSQL foundation. Then add authenticated identities and attempt records before implementing atomic claims, lease recovery, and retries. Submission idempotency should ship with the first usable client API. The [roadmap](docs/roadmap.md) gives the full order and release gates.
 
 ## License
 

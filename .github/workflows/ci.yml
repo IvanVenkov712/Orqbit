@@ -41,3 +41,13 @@ jobs:
         run: uv run --locked python -m compileall -q src migrations tests
       - name: Migrate and test against PostgreSQL
         run: uv run --locked pytest -q
+
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build, migrate, and check persistence with Compose
+        run: python tests/compose_smoke.py
