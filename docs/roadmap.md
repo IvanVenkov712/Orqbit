@@ -4,6 +4,8 @@ This order establishes durable state and ownership before adding automatic re-ex
 
 ## 1. Reproducible PostgreSQL foundation
 
+**Status:** Local acceptance passed on 2026-11-04, including readiness failure tests and the [fresh-checkout demonstration](quickstart.md). PostgreSQL tests and the container smoke check are configured in CI; the first GitHub workflow run is pending. See [current verification](status.md).
+
 Declare the supported Python version, dependencies, and a lock file. Add environment-based settings and validated startup configuration. Implement a Dockerfile and Compose services for PostgreSQL and the API, with a persistent database volume, database health checks, and an explicit migration step. Add the recovery service when its executable exists. Keep development credentials out of production configuration.
 
 Replace SQLite configuration with a PostgreSQL driver and versioned migrations, remove schema creation from import, normalize the status enum, and add UTC timestamps. Establish basic lint/syntax checks and PostgreSQL integration tests in CI immediately.

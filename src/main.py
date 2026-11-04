@@ -4,12 +4,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from api.routers.claim_router import claim_router
+from api.routers.health_router import health_router
 from api.routers.job_router import job_router
 
 app = FastAPI()
 
 app.include_router(job_router)
 app.include_router(claim_router)
+app.include_router(health_router)
 
 
 @app.exception_handler(RequestValidationError)
@@ -23,10 +25,3 @@ async def invalid_request(request: Request, exc: RequestValidationError):
             for error in exc.errors()
         ],
     })
-
-@app.get("/health")
-def health():
-    """Report API liveness without checking the external market-data provider."""
-    return {"status": "ok"}
-
-

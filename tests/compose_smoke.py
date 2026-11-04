@@ -11,7 +11,7 @@ import secrets
 import subprocess
 import time
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -45,22 +45,30 @@ def main() -> None:
             check=True,
         )
 
-    def request(path: str, payload: dict | None = None) -> dict | list:
+    def request(
+        path: str, payload: dict | None = None, expected_status: int = 200
+    ) -> dict | list:
         data = json.dumps(payload).encode() if payload is not None else None
         message = Request(
             f"http://127.0.0.1:{args.port}{path}",
             data=data,
             headers={"Content-Type": "application/json"},
         )
-        with urlopen(message, timeout=3) as response:
-            assert response.status == 200
+        try:
+            response = urlopen(message, timeout=8)
+        except HTTPError as error:
+            if error.code != expected_status:
+                raise
+            response = error
+        with response:
+            assert response.status == expected_status
             return json.load(response)
 
     def wait_for_api() -> None:
         deadline = time.monotonic() + 30
         while True:
             try:
-                request("/jobs")
+                assert request("/health/ready") == {"status": "ready"}
                 return
             except (URLError, TimeoutError, ConnectionError):
                 if time.monotonic() >= deadline:
@@ -71,6 +79,7 @@ def main() -> None:
         compose("config", "--quiet")
         compose("up", "--build", "--wait", "--wait-timeout", "120", "api")
         wait_for_api()
+        assert request("/health/live") == {"status": "ok"}
 
         # Confirm the final image excludes development tools and environment files.
         compose(
@@ -99,12 +108,22 @@ def main() -> None:
         compose("run", "--rm", "migrate")
         assert request(path) == created
 
+        # The API stays live during an actual database outage and recovers
+        # without restarting its process or reusing broken pooled connections.
+        compose("stop", "db")
+        assert request("/health/live") == {"status": "ok"}
+        assert request("/health/ready", expected_status=503) == {"status": "not_ready"}
+        compose("up", "--wait", "--wait-timeout", "120", "db")
+        wait_for_api()
+        assert request(path) == created
+
         compose("down")  # Retain the named PostgreSQL volume.
         compose("up", "--wait", "--wait-timeout", "120", "api")
         wait_for_api()
         assert request(path) == created
         print(
-            "Compose smoke check passed: migrated, created/read, recreated, preserved."
+            "Compose smoke check passed: migrated, ready, survived database outage, "
+            "created/read, recreated, preserved."
         )
     except Exception:
         compose("logs", "--no-color")

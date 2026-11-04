@@ -7,6 +7,7 @@ src/
   main.py                  FastAPI application; no schema creation at import
   config.py                Validated environment settings
   database.py              PostgreSQL engine and session dependency
+  health.py                Read-only database/schema readiness checks
   models.py                Job model and status enum
   api/
     routers/job_router.py  Create, list, and read jobs
@@ -65,7 +66,7 @@ For a POSIX shell, use `export TEST_DATABASE_URL='postgresql+psycopg://postgres:
 
 Tests require an explicit `TEST_DATABASE_URL` using the psycopg driver and a database name ending in `_test`; they do not fall back to your application database. The database user must be able to create schemas. Every run creates a uniquely named temporary schema, configures both the API and Alembic to use it, applies migrations from scratch, and drops only that schema on completion. Test connections use UTC. Jobs in other schemas are untouched. Each test clears jobs in the temporary schema, and requests use real commits and separate sessions. No SQLite substitute or `create_all()` is used. A missing or unavailable test database fails the suite instead of silently skipping it.
 
-The suite covers nested JSON/Unicode persistence, creation and retrieval, invalid submissions, missing jobs, claim eligibility, an empty queue, success/failure, invalid transitions, canonical PostgreSQL enum values, timezone-aware timestamps, and repeated migration upgrades that preserve rows. Timestamp update tests use an explicit old timestamp instead of sleeps. Timestamps are checked in PostgreSQL because the current response model does not expose them.
+The suite covers nested JSON/Unicode persistence, creation and retrieval, invalid submissions, missing jobs, claim eligibility, an empty queue, success/failure, invalid transitions, canonical PostgreSQL enum values, timezone-aware timestamps, and repeated migration upgrades that preserve rows. Health tests cover healthy PostgreSQL, a refused connection, missing migration records, outdated revisions, missing tables/columns, and a schema query blocked by a table lock. They also verify that liveness remains available and readiness recovers when the problem is removed. Timestamp update tests use an explicit old timestamp instead of sleeps. Timestamps are checked in PostgreSQL because the current response model does not expose them.
 
 Run the other CI checks locally with:
 
@@ -74,7 +75,7 @@ uv run --locked ruff check .
 uv run --locked python -m compileall -q src migrations tests
 ```
 
-GitHub Actions runs on pushes and pull requests with Python 3.13 and a healthy PostgreSQL 18 service. It installs locked dependencies, runs these checks, and runs pytest, whose fixture applies Alembic migrations. A separate job builds and exercises the Compose stack, including persistence across container recreation. CI database credentials exist only for temporary services. These tests do not establish concurrent claim safety, ownership, abandoned-job recovery, or readiness behavior.
+GitHub Actions runs on pushes and pull requests with Python 3.13 and a healthy PostgreSQL 18 service. It installs locked dependencies, runs these checks, and runs pytest, whose fixture applies Alembic migrations. A separate job builds and exercises the Compose stack, including readiness during a database outage and persistence across container recreation. CI database credentials exist only for temporary services. These tests do not establish concurrent claim safety, ownership, or abandoned-job recovery.
 
 ## Docker and Compose
 
@@ -98,21 +99,21 @@ From the repository root:
 Copy-Item .env.compose.example .env.compose
 # Edit .env.compose before starting.
 docker compose --env-file .env.compose config --quiet
-docker compose --env-file .env.compose up --build -d
+docker compose --env-file .env.compose up --build --wait --wait-timeout 120 api
 docker compose --env-file .env.compose ps --all
 docker compose --env-file .env.compose logs migrate api
 ```
 
-The startup command automatically runs the separate migration service. To run migration operations explicitly using the built image:
+The startup command automatically runs the separate migration service and waits for the API's `/health/ready` health check. The [clean-checkout guide](quickstart.md) gives the complete manual build/migrate/start and persistence demonstration. To run migration operations explicitly using the built image:
 
 ```powershell
 docker compose --env-file .env.compose run --rm migrate
 docker compose --env-file .env.compose run --rm migrate alembic current
 ```
 
-Use `up --build -d` after code or migration changes. `restart` does not rebuild the image or apply new migrations. Normal `down` retains the database volume. `down --volumes` deletes it and all stored jobs. Credentials in `.env.compose` initialize a new database volume; changing them later does not change credentials inside an existing database.
+Use `up --build --wait --wait-timeout 120 api` after code or migration changes. `restart` does not rebuild the image or apply new migrations. Normal `down` retains the database volume. `down --volumes` deletes it and all stored jobs. Credentials in `.env.compose` initialize a new database volume; changing them later does not change credentials inside an existing database.
 
-An automated smoke check runs the complete flow in its own randomly named project with generated test credentials and a temporary database volume. It builds the image, waits for startup, checks that the runtime excludes secrets and development tools, creates/reads a job, reruns migrations, recreates the containers while retaining the volume, and reads the same job. It removes only its own containers and volume afterward:
+An automated smoke check runs the complete flow in its own randomly named project with generated test credentials and a temporary database volume. It builds the image, waits for readiness, checks that the runtime excludes secrets and development tools, creates/reads a job, reruns migrations, stops PostgreSQL to verify live=200/ready=503, starts PostgreSQL again to verify recovery, recreates the containers while retaining the volume, and reads the same job. It removes only its own containers and volume afterward:
 
 ```powershell
 python tests/compose_smoke.py
@@ -120,7 +121,7 @@ python tests/compose_smoke.py
 python tests/compose_smoke.py --port 18001
 ```
 
-The smoke script uses only Python's standard library and Docker Compose; a host virtual environment or `.env` file is not required. It runs as a separate GitHub Actions job. There is no recovery executable or service yet. The PostgreSQL health check and migration dependency control initial startup; API readiness when the database/schema becomes unavailable remains to be implemented.
+The smoke script uses only Python's standard library and Docker Compose; a host virtual environment or `.env` file is not required. It runs as a separate GitHub Actions job. There is no recovery executable or service yet. The PostgreSQL health check and migration dependency control initial startup; the API health check continues checking database/schema readiness after startup. An unhealthy container is reported as such; Docker Compose does not automatically restart it solely because a health check fails.
 
 ## Validation strategy
 
@@ -130,6 +131,6 @@ Add HTTP tests for status codes, serialization, authentication, visibility, pagi
 
 For an MVP acceptance demonstration: submit with an idempotency key; repeat it and get the same job; claim with one of two concurrent workers; renew its lease; kill the worker; observe an expired attempt and delayed retry; finish with a second worker; inspect both attempts and creator attribution; verify that the first worker's late completion is rejected. Repeat across a service restart.
 
-The original documentation review used isolated in-memory probes. On 2026-11-04, the committed integration suite passed all 20 tests against local PostgreSQL 18.3. Locked dependency installation, Ruff, and syntax checks also passed. Container verification passed with `docker compose --env-file .env.compose.example --project-name orqbit-container-check build --no-cache` and `python tests/compose_smoke.py`, including migrations and persistence across container recreation. The GitHub Actions workflows have been added but have not been executed on GitHub in this session. See the [verification record](status.md#verification-performed) for the original review scope.
+The original documentation review used isolated in-memory probes. On 2026-11-04, all 28 integration tests passed against local PostgreSQL 18.3 (`pytest -q -p no:cacheprovider`, with the test URL supplied). Ruff, formatting of the added files, syntax compilation, and diff checks passed. `python tests/compose_smoke.py` passed, including real database outage/recovery and persistence across container recreation. The [manual demonstration](quickstart.md) passed separately in a fresh local clone with the proposed changes applied: no virtual environment or local configuration was copied, a new `.env.compose` was configured, the image was built with `--no-cache`, and the explicit migration/start/create/read/down/start/read/stop commands succeeded. The GitHub Actions workflows have not been executed on GitHub in this session. See the [verification record](status.md#verification-performed) for the original review scope.
 
 When implementing features, update the current API and status docs together, mark roadmap milestones complete only after their acceptance checks pass, and record meaningful remaining limitations.

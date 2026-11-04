@@ -2,7 +2,7 @@
 
 Orqbit is an asynchronous job processing platform: clients submit jobs, and workers pull jobs they know how to execute. The intended design uses PostgreSQL for durable queue state, worker leases, retries, idempotency, and execution history.
 
-**Status: early prototype.** Job submission, retrieval, claiming by type, success/failure reporting, PostgreSQL configuration, and Alembic migrations exist. Authentication, heartbeats, recovery, retries, idempotency, and attempt history are still planned. Concurrent claiming is currently unsafe. See the [implementation status and known problems](docs/status.md) before running multiple workers.
+**Status: early prototype.** Job submission, retrieval, claiming by type, success/failure reporting, PostgreSQL configuration, Alembic migrations, and database/schema readiness checks exist. Authentication, heartbeats, recovery, retries, idempotency, and attempt history are still planned. Concurrent claiming is currently unsafe. See the [implementation status and known problems](docs/status.md) before running multiple workers.
 
 ## Intended capabilities
 
@@ -55,6 +55,8 @@ PostgreSQL integration tests and the GitHub Actions workflow are included. See [
 
 ## Running with Docker Compose
 
+For the full build, migration, job creation, and persistence demonstration from a fresh checkout, follow the [clean-checkout guide](docs/quickstart.md).
+
 With Docker running in Linux container mode and Docker Compose v2 or later, copy the local container settings from the repository root:
 
 ```powershell
@@ -66,12 +68,12 @@ Edit `.env.compose` to choose your local database password, updating both `POSTG
 Build and start the stack:
 
 ```powershell
-docker compose --env-file .env.compose up --build -d
+docker compose --env-file .env.compose up --build --wait --wait-timeout 120 api
 docker compose --env-file .env.compose ps --all
 docker compose --env-file .env.compose logs migrate
 ```
 
-Compose waits for PostgreSQL's health check, runs `alembic upgrade head` in the one-shot `migrate` service, then starts the API. A successful migration container remains exited with code 0. Open `http://127.0.0.1:8000/docs` once the API starts. Set `API_PORT` in `.env.compose` if port 8000 is already in use. PostgreSQL is available only inside the Compose network.
+Compose waits for PostgreSQL's health check, runs `alembic upgrade head` in the one-shot `migrate` service, then starts the API and waits for its readiness health check. A successful migration container remains exited with code 0. Open `http://127.0.0.1:8000/docs`. Set `API_PORT` in `.env.compose` if port 8000 is already in use. PostgreSQL is available only inside the Compose network.
 
 Create a job and read it back in PowerShell:
 
@@ -84,11 +86,13 @@ Recreate the containers and read the same job again:
 
 ```powershell
 docker compose --env-file .env.compose down
-docker compose --env-file .env.compose up -d
+docker compose --env-file .env.compose up --wait --wait-timeout 120 api
 Invoke-RestMethod -Uri "http://127.0.0.1:8000/jobs/$($job.id)"
 ```
 
-The named database volume survives `down`. Adding `--volumes` to `down` deletes the stored jobs. See [container development and verification](docs/development.md#docker-and-compose) for explicit migration commands and the automated smoke check. Application readiness checks are still a separate milestone.
+The named database volume survives `down`. Adding `--volumes` to `down` deletes the stored jobs. See [container development and verification](docs/development.md#docker-and-compose) for explicit migration commands and the automated smoke check.
+
+`GET /health/live` returns 200 while the API responds; `/health` remains an alias. `GET /health/ready` returns 200 only when PostgreSQL is reachable, its migration revision matches this application, and the required job table columns can be queried. It returns 503 otherwise. Health checks never run migrations or expose database credentials.
 
 ## Documentation
 
@@ -98,12 +102,13 @@ The named database volume survives `down`. Adding `--volumes` to `down` deletes 
 - [Implementation roadmap](docs/roadmap.md): dependency-ordered milestones and acceptance criteria.
 - [Requirements](docs/requirements.md): functional scope, non-functional requirements, and important additions.
 - [Development](docs/development.md): repository layout, launch limitations, and validation strategy.
+- [Clean-checkout guide](docs/quickstart.md): exact Docker commands and job persistence demonstration.
 
 The status and current API sections describe existing code. Target designs and roadmap items are proposals, not implemented behavior.
 
 ## Recommended next step
 
-Complete database/schema readiness checks for the PostgreSQL foundation. Then add authenticated identities and attempt records before implementing atomic claims, lease recovery, and retries. Submission idempotency should ship with the first usable client API. The [roadmap](docs/roadmap.md) gives the full order and release gates.
+Add authenticated identities and attempt records before implementing atomic claims, lease recovery, and retries. Submission idempotency should ship with the first usable client API. The [roadmap](docs/roadmap.md) gives the full order and release gates.
 
 ## License
 

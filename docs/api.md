@@ -12,10 +12,21 @@ These routes come from `src/api/routers/`. They have no authentication, version 
 | POST | `/workers/claim` | `supported_types: string[]` | Oldest matching pending job by ID |
 | POST | `/workers/{job_id}/succeed` | `result: object` | `{}` |
 | POST | `/workers/{job_id}/fail` | `error: object` | `{}` |
+| GET | `/health/live` | None | `{"status":"ok"}` |
+| GET | `/health` | None | Liveness alias: `{"status":"ok"}` |
+| GET | `/health/ready` | None | `{"status":"ready"}` when the database/schema is usable |
 
 Existing IDs are integers. The ID in `/workers/{job_id}/...` identifies a **job**, despite the route prefix.
 
-A job response contains `id`, `job_type`, `params`, `status`, `result`, and `error`; the latter two can be null. Typical status values are `PENDING`, `RUNNING`, `SUCCEEDED`, and `FAILED`. The model also contains an unintended lowercase `pending` value; see [known problems](status.md).
+A job response contains `id`, `job_type`, `params`, `status`, `result`, and `error`; the latter two can be null. Status values are `PENDING`, `RUNNING`, `SUCCEEDED`, and `FAILED`.
+
+### Health behavior
+
+Liveness checks only that the API responds. It keeps returning 200 during a database outage or when migrations have not been applied. `/health` remains a compatible alias for `/health/live`.
+
+Readiness opens a fresh PostgreSQL connection, compares the database's Alembic heads to the migration scripts shipped with the application, then runs a zero-row query selecting every required job column. An empty or outdated migration stamp, a missing table/column, inaccessible database, or failed query produces **503** with `{"status":"not_ready"}`. It does not return SQL, exception details, or credentials. Both readiness outcomes use `Cache-Control: no-store`.
+
+Probes run read-only, with a three-second connection timeout and a two-second timeout per SQL statement, using a separate connection rather than waiting for an application pool slot. They never create or migrate tables. The revision check plus column query verifies the schema needed for job reads; it is not a full audit of every possible manual schema change. API connections check pooled connections before reuse so they can reconnect after PostgreSQL restarts. Readiness is checked again on every request.
 
 ### Example interaction
 
@@ -56,7 +67,7 @@ Use the actual returned ID instead of `1`. Success and failure are alternative o
 | Claim finds no matching pending job | 404, `{"detail": "No jobs were found"}` |
 | Success/failure references a job that is not running | 400, `{"detail": "Job not running"}` |
 
-No explicit response behavior is defined for database outages. Repeating an accepted success/failure report currently returns 400 because the job is no longer running.
+Readiness has the database-outage behavior described above; job endpoints do not yet have a general database-outage error mapping. Repeating an accepted success/failure report currently returns 400 because the job is no longer running.
 
 ## Proposed versioned contract
 
@@ -74,8 +85,6 @@ The following endpoints and semantics are **not implemented**. Finalize them alo
 | POST | `/v1/jobs/{job_id}/attempts/{attempt_id}/heartbeat` | Renew that attempt's lease using its token |
 | POST | `/v1/jobs/{job_id}/attempts/{attempt_id}/succeed` | Idempotently acknowledge success for the current owned attempt |
 | POST | `/v1/jobs/{job_id}/attempts/{attempt_id}/fail` | Record structured failure and apply the retry policy |
-| GET | `/health/live` | Process liveness |
-| GET | `/health/ready` | Database/schema readiness |
 
 Worker credentials authenticate the principal; requested types are intersected with its permitted capabilities. Registration and a user-supplied worker name do not themselves establish identity. Use separate transport credentials for clients and workers, and send attempt tokens through a documented protected header.
 
