@@ -22,8 +22,8 @@ class JobStatus(enum.Enum):
 
 class PermissionPolicy(enum.Enum):
     PRIVATE = "PRIVATE" # Visible only for the same user's workers
-    PERMITTED_USERS = "PERMITTED_USERS_ONLY" # Visible only for the workers of the permitted users
-    PERMITTED_WORKERS = "PERMITTED_WORKERS_ONLY" # Visible only for the permitted workers
+    PERMITTED_USERS = "PERMITTED_USERS" # Visible only for the workers of the permitted users
+    PERMITTED_WORKERS = "PERMITTED_WORKERS" # Visible only for the permitted workers
     PERMITTED_WORKERS_AND_USERS = "PERMITTED_WORKERS_AND_USERS" # Visible only for the permitted workers
                                                                 # and the workers of the permitted users
     ALL = "ALL" # Visible for all workers (dangerous)
