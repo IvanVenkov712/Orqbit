@@ -8,6 +8,7 @@ from models.base import Base
 
 if TYPE_CHECKING:
     from .job_attempts import JobAttempt
+    from .supported_types import SupportedJobType
     from .user import User
 
 
@@ -42,4 +43,10 @@ class Worker(Base):
     attempts: Mapped[list["JobAttempt"]] = relationship(
         back_populates="worker"
     )
+    
+    supported_types: Mapped[list["SupportedJobType"]] = relationship(
+        back_populates="worker",
+        cascade="all, delete-orphan"
+    )
+
     
