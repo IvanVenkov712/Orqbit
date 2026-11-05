@@ -7,7 +7,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from models.base import Base
 
 if TYPE_CHECKING:
-    from models.user import User
+    from .job_attempts import JobAttempt
+    from .user import User
 
 
 class Worker(Base):
@@ -36,5 +37,9 @@ class Worker(Base):
 
     user: Mapped["User"] = relationship(
         back_populates="workers"
+    )
+    
+    attempts: Mapped[list["JobAttempt"]] = relationship(
+        back_populates="worker"
     )
     

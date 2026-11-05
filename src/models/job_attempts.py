@@ -1,8 +1,8 @@
 import enum
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Enum, ForeignKey, UniqueConstraint, DateTime
+from sqlalchemy import DateTime, Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,6 +16,7 @@ class AttemptStatus(enum.Enum):
     RUNNING = "RUNNING" # The worker began working on the job
     SUCCEEDED = "SUCCEEDED" # The worker finished working on the job
     FAILED = "FAILED" # The worker failed finishing the job
+    LOST = "LOST" # The worker stopped responding
 
 class JobAttempt(Base):
     
@@ -45,13 +46,12 @@ class JobAttempt(Base):
     )
     
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
-    job: Mapped["Job"] = relationship(back_populates="jobs")
+    job: Mapped["Job"] = relationship(back_populates="attempts")
 
     worker_id: Mapped[int] = mapped_column(ForeignKey("workers.id"))
-    worker: Mapped["Worker"] = relationship(back_populates="workers")
+    worker: Mapped["Worker"] = relationship(back_populates="attempts")
     
-    __table_args__ = {
+    __table_args__ = (
         UniqueConstraint("job_id", "attempt_number")
-    }
-    
+    )
     
