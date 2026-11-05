@@ -16,6 +16,7 @@ class UserRole(enum.Enum):
     REGULAR = "REGULAR"
 
 class User(Base):
+
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -26,7 +27,9 @@ class User(Base):
         Enum(UserRole), default=UserRole.REGULAR
     )
 
-    password: Mapped[str] = mapped_column()
+    password_hash: Mapped[str] = mapped_column()
+    active: Mapped[bool] = mapped_column(default=True)
+
 
     jobs: Mapped[list["Job"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

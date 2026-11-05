@@ -10,8 +10,13 @@ if TYPE_CHECKING:
 
 
 class Worker(Base):
+
+    __tablename__ = "workers"
+
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(unique=True)
+    active: Mapped[bool] = mapped_column(default=True)
+    secret_api_key: Mapped[str] = mapped_column(unique=True)
 
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
