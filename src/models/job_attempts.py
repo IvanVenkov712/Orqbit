@@ -1,8 +1,7 @@
 import enum
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Enum, ForeignKey, UniqueConstraint
+from sqlalchemy import Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
