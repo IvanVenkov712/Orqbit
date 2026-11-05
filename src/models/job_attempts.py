@@ -1,7 +1,9 @@
 import enum
-from typing import TYPE_CHECKING
+from datetime import datetime, UTC
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Enum, ForeignKey, UniqueConstraint
+from sqlalchemy import Enum, ForeignKey, UniqueConstraint, DateTime
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import Base
@@ -23,6 +25,23 @@ class JobAttempt(Base):
     attempt_number: Mapped[int] = mapped_column()
     status: Mapped[AttemptStatus] = mapped_column(
         Enum(AttemptStatus), default=AttemptStatus.RUNNING
+    )
+
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
     )
     
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
