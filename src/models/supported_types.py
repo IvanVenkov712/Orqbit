@@ -13,4 +13,4 @@ class SupportedJobType(Base, TimestampMixin):
 
     type_name: Mapped[str] = mapped_column(primary_key=True)
     worker_id: Mapped[int] = mapped_column(ForeignKey("workers.id"), primary_key=True)
-    worker: Mapped[Worker] = relationship(back_populates="supported_types")
+    worker: Mapped["Worker"] = relationship(back_populates="supported_types")

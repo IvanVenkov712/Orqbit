@@ -1,7 +1,7 @@
 import enum
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Enum, ForeignKey, UniqueConstraint
+from sqlalchemy import CheckConstraint, Enum, ForeignKey, Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,8 +36,18 @@ class JobAttempt(Base, TimestampMixin):
 
     worker_id: Mapped[int] = mapped_column(ForeignKey("workers.id"))
     worker: Mapped["Worker"] = relationship(back_populates="attempts")
-    
+
     __table_args__ = (
-        UniqueConstraint("job_id", "attempt_number")
+        UniqueConstraint("job_id", "attempt_number"),
+        CheckConstraint(
+            "attempt_number > 0",
+            name="ck_job_attempts_positive_number",
+        ),
+        Index(
+            "uq_job_attempts_one_running",
+            "job_id",
+            unique=True,
+            postgresql_where=text("status = 'RUNNING'"),
+        ),
     )
     

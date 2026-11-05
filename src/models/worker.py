@@ -18,7 +18,7 @@ class Worker(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(unique=True)
     active: Mapped[bool] = mapped_column(default=True)
-    secret_api_key: Mapped[str] = mapped_column(unique=True)
+    secret_api_key_hash: Mapped[str] = mapped_column(unique=True)
 
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
@@ -27,7 +27,8 @@ class Worker(Base, TimestampMixin):
     )
     
     attempts: Mapped[list["JobAttempt"]] = relationship(
-        back_populates="worker"
+        back_populates="worker",
+        passive_deletes="all",
     )
     
     supported_types: Mapped[list["SupportedJobType"]] = relationship(
