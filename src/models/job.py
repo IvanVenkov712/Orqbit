@@ -6,7 +6,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .base import Base
+from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .job_attempts import JobAttempt
@@ -20,25 +20,12 @@ class JobStatus(enum.Enum):
     FAILED = "FAILED" # The worker failed finishing the job
 
 
-class Job(Base):
+class Job(Base, TimestampMixin):
     __tablename__ = "jobs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     job_type: Mapped[str] = mapped_column(String(100))
     params: Mapped[dict[str, Any]] = mapped_column(JSONB)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        nullable=False,
-    )
-
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-        nullable=False,
-    )
 
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus),

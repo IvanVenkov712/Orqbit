@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from models.base import Base
+from models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .job_attempts import JobAttempt
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from .user import User
 
 
-class Worker(Base):
+class Worker(Base, TimestampMixin):
 
     __tablename__ = "workers"
 
@@ -20,19 +20,6 @@ class Worker(Base):
     name: Mapped[str] = mapped_column(unique=True)
     active: Mapped[bool] = mapped_column(default=True)
     secret_api_key: Mapped[str] = mapped_column(unique=True)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        nullable=False,
-    )
-
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-        nullable=False,
-    )
 
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 

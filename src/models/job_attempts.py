@@ -6,7 +6,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from models.base import Base
+from models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .job import Job
@@ -18,7 +18,7 @@ class AttemptStatus(enum.Enum):
     FAILED = "FAILED" # The worker failed finishing the job
     LOST = "LOST" # The worker stopped responding
 
-class JobAttempt(Base):
+class JobAttempt(Base, TimestampMixin):
     
     __tablename__ = "job_attempts"
     
@@ -31,19 +31,6 @@ class JobAttempt(Base):
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        nullable=False,
-    )
-
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-        nullable=False,
-    )
     
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
     job: Mapped["Job"] = relationship(back_populates="attempts")
