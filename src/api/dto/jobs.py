@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from models import JobStatus
+from models.job import JobStatus
 
 
 class JobCreate(BaseModel):

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from api.dto.claims import ClaimJob, CompleteJob, FailJob
 from api.dto.jobs import JobRead
 from database import SessionDep
-from models import Job, JobStatus
+from models.job import Job, JobStatus
 
 claim_router = APIRouter()
 

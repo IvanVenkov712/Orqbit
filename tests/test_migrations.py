@@ -5,7 +5,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
-from models import Job
+from models.job import Job
 
 
 def test_migrated_schema_has_postgresql_types(database, alembic_config):

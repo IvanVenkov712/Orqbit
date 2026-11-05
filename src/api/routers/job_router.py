@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from api.dto.jobs import JobCreate, JobRead
 from database import SessionDep
-from models import Job
+from models.job import Job
 
 job_router = fastapi.APIRouter()
 

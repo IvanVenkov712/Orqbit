@@ -1,10 +1,15 @@
 import enum
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Enum, String
+from sqlalchemy import DateTime, Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .base import Base
+
+if TYPE_CHECKING:
+    from .user import User
 
 
 class JobStatus(enum.Enum):
@@ -13,8 +18,6 @@ class JobStatus(enum.Enum):
     SUCCEEDED = "SUCCEEDED" # The worker finished working on the job
     FAILED = "FAILED" # The worker failed finishing the job
 
-class Base(DeclarativeBase):
-    pass
 
 class Job(Base):
     __tablename__ = "jobs"
@@ -48,3 +51,7 @@ class Job(Base):
     error: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
     )
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+    user: Mapped["User"] = relationship(back_populates="jobs")

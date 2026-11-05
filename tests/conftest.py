@@ -14,7 +14,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from models import Job
+from models.job import Job
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from models import Job, JobStatus
+from models.job import Job, JobStatus
 
 
 def test_create_and_read_job_preserves_json(client, database):
