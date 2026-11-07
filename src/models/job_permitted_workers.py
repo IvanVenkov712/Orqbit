@@ -1,10 +1,10 @@
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .base import Base, TimestampMixin
+from .base import Base
 
 
-class PermittedWorker(Base, TimestampMixin):
+class PermittedWorker(Base):
     
     __tablename__ = "job_permitted_workers"
     

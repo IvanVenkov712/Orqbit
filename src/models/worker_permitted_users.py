@@ -3,10 +3,13 @@ from typing import TYPE_CHECKING
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
-from models.base import Base, TimestampMixin
+from models.base import Base
 
 
-class WorkerPermittedUser(Base, TimestampMixin):
+class WorkerPermittedUser(Base):
+
+    __tablename__ = "worker_permitted_users"
+
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id"), primary_key=True
     )

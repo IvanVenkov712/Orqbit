@@ -1,4 +1,3 @@
-
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -18,7 +17,7 @@ from models.user import User
 app = FastAPI()
 password_hash = PasswordHash.recommended()
 DUMMY_HASH = password_hash.hash("dummypassword")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 
 # Response schemas
@@ -26,6 +25,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
 
 # Password utilities
 
@@ -45,9 +45,9 @@ def get_user(session: Session, username: str) -> User | None:
 
 
 def authenticate_user(
-    session: Session,
-    username: str,
-    password: str,
+        session: Session,
+        username: str,
+        password: str,
 ) -> User | None:
     user = get_user(session, username)
 
@@ -86,8 +86,8 @@ def create_access_token(username: str) -> str:
 # Authentication dependencies
 
 def get_current_user(
-    db_session: SessionDep,
-    token: Annotated[str, Depends(oauth2_scheme)],
+        db_session: SessionDep,
+        token: Annotated[str, Depends(oauth2_scheme)],
 ) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -120,7 +120,7 @@ def get_current_user(
 
 
 def get_current_active_user(
-    current_user: Annotated[User, Depends(get_current_user)],
+        current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     if not current_user.active:
         raise HTTPException(
@@ -130,7 +130,9 @@ def get_current_active_user(
 
     return current_user
 
+
 CurrentUser = Annotated[User, Depends(get_current_active_user)]
+
 
 def validate_user_not_exist(session: Session, username: str, email: str):
     stmt = select(User).where(User.username == username)

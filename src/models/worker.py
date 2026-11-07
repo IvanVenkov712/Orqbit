@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     from .job_attempts import JobAttempt
     from .supported_types import SupportedJobType
     from .user import User
-    from .worker_permitted_users import WorkerPermittedUser
 
 
 class PermissionPolicy(enum.Enum):
@@ -48,9 +47,8 @@ class Worker(Base, TimestampMixin):
         cascade="all, delete-orphan"
     )
     
-    permitted_users: Mapped[list["WorkerPermittedUser"]] = relationship(
-        back_populates="worker",
-        cascade="all, delete-orphan"
+    permitted_users: Mapped[list["User"]] = relationship(
+        secondary="worker_permitted_users"
     )
     
 

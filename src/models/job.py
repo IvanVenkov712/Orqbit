@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from .job_permitted_users import PermittedUser
     from .job_permitted_workers import PermittedWorker
     from .user import User
+    from .worker import Worker
 
 
 class JobStatus(enum.Enum):
@@ -61,11 +62,11 @@ class Job(Base, TimestampMixin):
     attempts: Mapped[list["JobAttempt"]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
     )
-    
-    permitted_users: Mapped[list["PermittedUser"]] = relationship(
-        cascade="all, delete-orphan"
+
+    permitted_users: Mapped[list["User"]] = relationship(
+        secondary="job_permitted_users"
     )
-    
-    permitted_workers: Mapped[list["PermittedWorker"]] = relationship(
-        cascade="all, delete-orphan"
+
+    permitted_workers: Mapped[list["Worker"]] = relationship(
+        secondary="job_permitted_workers"
     )
