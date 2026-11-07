@@ -1,6 +1,9 @@
+from http import HTTPStatus
+
 import fastapi
-from fastapi import HTTPException
-from sqlalchemy import select, or_, and_
+from alembic.util import status
+from fastapi import HTTPException, Query
+from sqlalchemy import and_, or_, select
 
 from database import SessionDep
 from dto.jobs import JobCreate, JobRead
@@ -28,6 +31,21 @@ def accessible_jobs_query(user: User):
         )
     )
 
+def job_accessible(job: Job, user: User) -> bool:
+
+    if job.permission_policy == PermissionPolicy.ALL:
+        return True
+
+    if job.user_id == user.id:
+        return True
+
+    if job.permission_policy in [PermissionPolicy.PERMITTED_USERS,
+                                 PermissionPolicy.PERMITTED_WORKERS_AND_USERS]:
+        return any(p_user.id == user.id for p_user in job.permitted_users)
+
+    return False
+
+
 @job_router.post(path="/jobs/", response_model=JobRead)
 def create_job(payload: JobCreate, session: SessionDep, user: CurrentUser):
     users = session.scalars(
@@ -51,31 +69,42 @@ def create_job(payload: JobCreate, session: SessionDep, user: CurrentUser):
     session.refresh(job)
     return job
 
-@job_router.get(path="/jobs", response_model=list[JobRead])
+@job_router.get("/jobs", response_model=list[JobRead])
 def list_jobs(
-        session: SessionDep,
-        user: CurrentUser,
-        owner: str | int | None = "me",
-        status: JobStatus | None = None,
-        job_type: str | None = None,
+    session: SessionDep,
+    user: CurrentUser,
+    owner_id: int | None = None,
+    status: JobStatus | None = None,
+    job_type: str | None = None,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
 ):
-    stmt = select(Job)
-    if owner == "me":
-        stmt = stmt.where(
-            Job.user_id == user.id
-        )
-    else:
-        stmt = stmt.where(
-            
-        )
+    stmt = accessible_jobs_query(user)
+
+    if owner_id is not None:
+        stmt = stmt.where(Job.user_id == owner_id)
+
+    if status is not None:
+        stmt = stmt.where(Job.status == status)
+
+    if job_type is not None:
+        stmt = stmt.where(Job.job_type == job_type)
+
+    stmt = (
+        stmt
+        .order_by(Job.id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+
     return session.scalars(stmt).all()
 
 
 @job_router.get(path="/jobs/{job_id}", response_model=JobRead)
-def get_job(job_id: int, session: SessionDep):
+def get_job(job_id: int, session: SessionDep, user: CurrentUser):
     job = session.get(Job, job_id)
 
-    if job is None:
+    if job is None or not job_accessible(job, user):
         raise HTTPException(404, "Job not found")
 
     return job
