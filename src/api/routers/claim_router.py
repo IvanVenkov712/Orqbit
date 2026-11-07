@@ -3,9 +3,9 @@ from http import HTTPStatus
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
-from api.dto.claims import ClaimJob, CompleteJob, FailJob
-from api.dto.jobs import JobRead
 from database import SessionDep
+from dto.claims import ClaimJob, CompleteJob, FailJob
+from dto.jobs import JobRead
 from models.job import Job, JobStatus
 
 claim_router = APIRouter()

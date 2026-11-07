@@ -2,7 +2,7 @@ import fastapi
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from api.dto.jobs import JobCreate, JobRead
+from dto.jobs import JobCreate, JobRead
 from database import SessionDep
 from models.job import Job
 

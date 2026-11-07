@@ -1,4 +1,7 @@
-from pydantic import PositiveInt, PostgresDsn, field_validator
+from typing import Any, Self
+
+import pydantic
+from pydantic import Field, PositiveInt, PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +15,9 @@ class Settings(BaseSettings):
     database_url: PostgresDsn
     lease_seconds: PositiveInt
     protraction_seconds: PositiveInt
+    secret_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    algorithm: str
+    access_token_expire_minutes: PositiveInt
 
     @field_validator("database_url")
     @classmethod
