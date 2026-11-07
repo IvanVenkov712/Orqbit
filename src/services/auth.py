@@ -131,3 +131,20 @@ def get_current_active_user(
     return current_user
 
 CurrentUser = Annotated[User, Depends(get_current_active_user)]
+
+def validate_user_not_exist(session: Session, username: str, email: str):
+    stmt = select(User).where(User.username == username)
+    user = session.scalar(stmt)
+    if user is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"User with username {username} already exists",
+        )
+
+    stmt = select(User).where(User.email == email)
+    user = session.scalar(stmt)
+    if user is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"User with email {email} already exists",
+        )
