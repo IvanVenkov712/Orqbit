@@ -9,7 +9,7 @@ from starlette import status
 from database import SessionDep
 from dto.user import UserRead, UserRegister
 from models.user import User
-from services.auth import (
+from services.user_auth import (
     Token,
     authenticate_user,
     create_access_token,

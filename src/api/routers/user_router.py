@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from dto.user import UserRead
-from services.auth import CurrentUser
+from services.user_auth import CurrentUser
 
 user_router = APIRouter()
 

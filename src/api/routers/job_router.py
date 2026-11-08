@@ -1,7 +1,4 @@
-from http import HTTPStatus
-
 import fastapi
-from alembic.util import status
 from fastapi import HTTPException, Query
 from sqlalchemy import and_, or_, select
 
@@ -10,7 +7,7 @@ from dto.jobs import JobCreate, JobRead
 from models.job import Job, JobStatus, PermissionPolicy
 from models.user import User
 from models.worker import Worker
-from services.auth import CurrentUser
+from services.user_auth import CurrentUser
 
 job_router = fastapi.APIRouter()
 
