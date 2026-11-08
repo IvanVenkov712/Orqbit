@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from database import SessionDep
 from dto.claims import ClaimJob, CompleteJob, FailJob
-from dto.jobs import JobRead
+from dto.job import JobRead
 from models.job import Job, JobStatus
 
 claim_router = APIRouter()

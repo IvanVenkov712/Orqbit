@@ -3,7 +3,7 @@ from fastapi import HTTPException, Query
 from sqlalchemy import and_, or_, select
 
 from database import SessionDep
-from dto.jobs import JobCreate, JobRead
+from dto.job import JobCreate, JobRead
 from models.job import Job, JobStatus, PermissionPolicy
 from models.user import User
 from models.worker import Worker
