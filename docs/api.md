@@ -1,84 +1,158 @@
-# API reference and proposed changes
+# API reference
 
-## Existing prototype routes
+This page describes the current unversioned prototype. `/docs` and `/openapi.json` expose the generated schema while the API runs. Successful routes return HTTP 200, including registration, worker creation, and job submission. The `/v1` contract at the end is a future proposal.
 
-These routes come from `src/api/routers/`. Job routes use user bearer tokens; worker claims and outcome reports use an `X-API-Key` and enforce worker ownership. There is no version prefix or idempotency-key handling. All successful routes currently return HTTP 200, including creation. Request validation uses FastAPI/Pydantic; invalid bodies normally return 422.
+## Authentication and users
 
-| Method | Route | Request body | Successful response |
+| Method | Route | Authentication | Request / response |
 | --- | --- | --- | --- |
-| POST | `/jobs/` | `job_type: string`, `params: object` | Job object |
-| GET | `/jobs` | None | Array of all jobs, ordered by ID |
-| GET | `/jobs/{job_id}` | None | Job object |
-| POST | `/workers/claim` | None | Attempt for the oldest accessible pending job matching the authenticated worker's stored types |
-| POST | `/workers/{attempt_id}/succeed` | `result: object` | `{"Status":"200 OK"}` |
-| POST | `/workers/{attempt_id}/fail` | `error: object` | `{"Status":"200 OK"}` |
-| GET | `/health/live` | None | `{"status":"ok"}` |
-| GET | `/health` | None | Liveness alias: `{"status":"ok"}` |
-| GET | `/health/ready` | None | `{"status":"ready"}` when the database/schema is usable |
+| POST | `/auth/register` | None | JSON: `username`, `email`, `full_name`, `password`; returns user metadata |
+| POST | `/auth/login` | None | Form fields: `username`, `password`; returns `access_token` and `token_type: "bearer"` |
+| GET | `/users/me/` | User bearer token | Returns the current active user's metadata |
 
-Existing IDs are integers. The ID in `/workers/{attempt_id}/...` identifies an **attempt**, as returned by claiming.
+User requests use `Authorization: Bearer <access_token>`. Worker claim/outcome requests use `X-API-Key: <worker-api-key>`. Creating or viewing workers uses a user token. No credentials are needed for health routes.
 
-A job response contains `id`, `job_type`, `params`, `status`, `result`, and `error`; the latter two can be null. Status values are `PENDING`, `RUNNING`, `SUCCEEDED`, and `FAILED`.
+Usernames and worker names contain 3?16 ASCII letters, digits, underscores, or hyphens. Email addresses are validated. Registration passwords contain 6?20 ASCII letters/digits or `@`, `$`, `#`, `%`, including at least one uppercase letter, lowercase letter, digit, and one of those symbols. User metadata contains `id`, `username`, `email`, `full_name`, `active`, and `role`; password hashes are not returned.
 
-### Health behavior
+Passwords are hashed with Argon2. Tokens use the configured signing key, algorithm, and expiry. Inactive users cannot log in or access user-protected routes. Worker authentication checks its API-key hash and the worker's active flag. The current API has no account-management, token-refresh, or key-rotation endpoints.
 
-Liveness checks only that the API responds. It keeps returning 200 during a database outage or when migrations have not been applied. `/health` remains a compatible alias for `/health/live`.
+## Jobs
 
-Readiness opens a fresh PostgreSQL connection, compares the database's Alembic heads to the migration scripts shipped with the application, then runs a zero-row query selecting every required job column. An empty or outdated migration stamp, a missing table/column, inaccessible database, or failed query produces **503** with `{"status":"not_ready"}`. It does not return SQL, exception details, or credentials. Both readiness outcomes use `Cache-Control: no-store`.
+| Method | Route | Request | Response |
+| --- | --- | --- | --- |
+| POST | `/jobs/` | JSON: `job_type`, `params`, `permission_policy`; optional permitted-ID lists | Created job |
+| GET | `/jobs` | Optional `owner_id`, `status`, `job_type`, `limit`, `offset` query parameters | Accessible jobs, newest ID first |
+| GET | `/jobs/{job_id}` | Job ID | Accessible job, or 404 |
 
-Probes run read-only, with a three-second connection timeout and a two-second timeout per SQL statement, using a separate connection rather than waiting for an application pool slot. They never create or migrate tables. The revision check plus column query verifies the schema needed for job reads; it is not a full audit of every possible manual schema change. API connections check pooled connections before reuse so they can reconnect after PostgreSQL restarts. Readiness is checked again on every request.
+All job routes require a user token. Job types are 1?100 characters and must contain a non-whitespace character. Types are matched as stored; they are not trimmed or normalized. `params` must be a JSON object and may contain nested JSON values. The creator comes from authentication, not a request-supplied user ID.
 
-### Example interaction
+`GET /jobs` defaults to `limit=50`, `offset=0`; limit must be 1?100 and offset nonnegative. Filters are combined with permission checks. Attempts are batch-loaded for response serialization.
 
-Submit using `POST /jobs/`:
+A job response contains:
 
-```json
+| Field | Meaning |
+| --- | --- |
+| `id`, `user_id` | Integer job and creator IDs |
+| `job_type`, `params` | Submitted type and JSON-object input |
+| `status` | `PENDING`, `RUNNING`, `SUCCEEDED`, or `FAILED` |
+| `result`, `error` | JSON objects or null |
+| `attempt_ids` | IDs of persisted attempts |
+
+Timestamps, permission policies, and permitted-ID lists are not currently included in job responses. Attempt details have no read endpoint yet.
+
+### Permission policies
+
+Submission requires `permission_policy`. `permitted_user_ids` and `permitted_worker_ids` default to empty lists; IDs must be positive and refer to existing records. A job's creator can always read it, and that creator's workers can claim it when their supported types match. For other users/workers:
+
+| Job policy | Additional access |
+| --- | --- |
+| `PRIVATE` | None |
+| `PERMITTED_USERS` | Listed users can read; their workers can claim |
+| `PERMITTED_WORKERS` | Listed workers can claim; their owners do not automatically gain user-facing read access |
+| `PERMITTED_WORKERS_AND_USERS` | Either of the two grant types above applies |
+| `ALL` | Any authenticated user can read; any compatible authenticated worker can claim |
+
+Grant lists only apply to their corresponding policy. A worker must also support the job type and the job must be pending to be claimable.
+
+### Submission example
+
+Use a bearer token obtained from login:
+
+```http
+POST /jobs/ HTTP/1.1
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
 {
   "job_type": "send_email",
-  "params": {"recipient": "person@example.com", "template": "welcome"}
+  "params": {"recipient": "person@example.com", "template": "welcome"},
+  "permission_policy": "PRIVATE"
 }
 ```
 
-Claim using `POST /workers/claim` with the worker's API key and no request body:
+The [quickstart](quickstart.md) provides executable registration/login and job-submission commands.
+
+## Workers
+
+| Method | Route | Request | Response |
+| --- | --- | --- | --- |
+| POST | `/workers` | JSON: `name`, `supported_types`, `permission_policy`; optional `permitted_user_ids` | Worker metadata plus `secret_api_key` |
+| GET | `/workers` | Optional `owner_id`, `job_type`, `limit`, `offset` | Accessible workers, newest ID first |
+| GET | `/workers/{worker_id}` | Worker ID | Accessible worker, or 404 |
+
+These routes require a user token. `supported_types` is a nonempty set of strings; each entry follows the job-type rules above. Duplicate types are deduplicated. Permitted-user IDs must exist. Pagination defaults and bounds match job lists; `job_type` filters workers supporting that type.
+
+Worker visibility policies are `PRIVATE` (owner only), `PERMITTED_USERS` (owner plus listed users), and `ALL` (all authenticated users). Visibility lets users inspect metadata; it does not reveal the API key or let them claim as that worker. Claims use the worker owner's job permissions plus explicit worker grants.
+
+Worker metadata contains `id`, `name`, `active`, `user_id`, `permission_policy`, `supported_types`, and `permitted_user_ids`. The raw API key is returned only by creation; store it for the independent worker. Reads/lists omit it, and PostgreSQL stores its SHA-256 hash. Worker names are globally unique.
+
+### Worker workflow
+
+Create a worker with a user token:
+
+```http
+POST /workers HTTP/1.1
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{"name":"email-worker","supported_types":["send_email"],"permission_policy":"PRIVATE"}
+```
+
+Then claim with the returned API key:
 
 ```http
 POST /workers/claim HTTP/1.1
 X-API-Key: <worker-api-key>
 ```
 
-Job types come from the worker's registered `supported_types` in the database.
-The former `ClaimJob` body is no longer part of the contract; any supplied body
-is ignored, including its `supported_types`. Workers with no stored types cannot
-claim jobs. The response identifies the claimed attempt in `id` and its job in
-`job_id`.
+Claim takes **no request body**. Job types come from the worker's stored capabilities; any supplied body, including the former `supported_types` field, is ignored. An empty compatible accessible queue returns **404**, `{"detail":"No jobs were found"}`. A worker with no stored types cannot claim work.
 
-With the returned attempt ID, report success using `POST /workers/1/succeed`:
+A successful claim returns `id` (the attempt ID), `job_id`, `job_type`, `attempt_number` (currently 1), `status` (`RUNNING`), and `params`. PostgreSQL `FOR UPDATE SKIP LOCKED` selects the oldest eligible job by ID. The job update and attempt creation commit in one transaction before the response. An empty result can also mean eligible rows are temporarily locked by other claims.
 
-```json
-{"result": {"message_id": "example-message-id"}}
-```
+The worker executes outside Orqbit, then sends one outcome:
 
-Alternatively, report failure for a running job using `POST /workers/1/fail`:
+| Method | Route | JSON body | Response |
+| --- | --- | --- | --- |
+| POST | `/workers/{attempt_id}/succeed` | `{"result":{"message_id":"example-message-id"}}` | `{"Status":"200 OK"}` |
+| POST | `/workers/{attempt_id}/fail` | `{"error":{"code":"DELIVERY_FAILED","message":"Provider failure"}}` | `{"Status":"200 OK"}` |
 
-```json
-{"error": {"code": "DELIVERY_FAILED", "message": "Temporary provider failure"}}
-```
+Both routes require the owning worker's API key. Use the returned attempt ID, not the job ID. Result/error must be JSON objects. The attempt is locked, checked for ownership and `RUNNING` status, and updated together with its job. Success/failure are alternative terminal outcomes; failure does not schedule a retry. There is no API operation that renews a lease, expires an abandoned attempt, or requeues it.
 
-Use the actual returned ID instead of `1`. Success and failure are alternative outcomes. A reported failure does not currently schedule a retry, even if its message says the problem was temporary.
+## Errors
 
-### Existing error behavior
+Errors use a top-level `detail` field. Request validation returns an array containing field `type`, `loc`, and `msg`; rejected input values are omitted. Other errors use string details.
 
-| Condition | Response |
+| Condition | Status and detail |
 | --- | --- |
-| Read/update references an absent job | 404, `{"detail": "Job not found"}` |
-| Claim finds no matching pending job | 404, `{"detail": "No jobs were found"}` |
-| Success/failure references a job that is not running | 400, `{"detail": "Job not running"}` |
+| Missing/invalid user token | 401; missing credentials use `Not authenticated`, invalid tokens use `Could not validate credentials` |
+| Login with wrong credentials or inactive user | 401, `Incorrect username or password` |
+| Inactive user on a user-protected route | 403, `Inactive user` |
+| Missing/invalid API key or inactive worker | 401, `Could not validate credentials` |
+| Missing/inaccessible job | 404, `Job not found` |
+| Missing/inaccessible worker | 404, `Worker not found` |
+| Empty claim result | 404, `No jobs were found` |
+| Missing attempt or another worker's attempt | 404, `Attempt not found` |
+| Succeed on a non-running attempt | 400, `Job not running` |
+| Fail on a non-running attempt | 400, `Attempt not running` |
+| Duplicate username/email | 400, `User with username ... already exists` or `User with email ... already exists` |
+| Duplicate worker name | 409, `Worker name already exists` |
+| Nonexistent permission IDs | 422, `Some permitted users do not exist` or `Some permitted workers do not exist` |
+| Invalid fields or malformed body | 422, validation detail array |
+| PostgreSQL data error, including oversized integer IDs or null characters in JSON strings | 422, `Input contains a value PostgreSQL cannot store` |
 
-Readiness has the database-outage behavior described above; job endpoints do not yet have a general database-outage error mapping. Repeating an accepted success/failure report currently returns 400 because the job is no longer running.
+Repeating an accepted outcome returns 400 because the attempt is no longer running. There is no idempotency-key support. PostgreSQL data errors are mapped to a generic response without SQL/exception details; other storage/application failures may still return 500.
+
+## Health behavior
+
+`GET /health/live` and its alias `GET /health` return 200 with `{"status":"ok"}` while the API responds, including during a database outage.
+
+`GET /health/ready` opens a fresh connection, compares database Alembic heads to shipped migration scripts, and runs zero-row queries selecting every mapped column in each application table. It returns 200 with `{"status":"ready"}` or 503 with `{"status":"not_ready"}`. Both responses carry `Cache-Control: no-store`. Missing tables/columns, migration mismatches, unavailable PostgreSQL, and query failures cause 503 without exposing database details.
+
+Probes are read-only, use a three-second connection timeout and a two-second timeout per SQL statement, and avoid waiting for an application pool slot. They never run migrations and do not audit indexes or constraints. Application connections are checked before reuse so they can reconnect after a PostgreSQL restart. Every readiness request checks again; database reconnection is distinct from abandoned-job recovery.
 
 ## Proposed versioned contract
 
-The following endpoints and semantics are **not implemented**. Finalize them alongside the identity and attempt model before exposing a stable client API.
+The versioned routes and additional semantics below are **not implemented**. Build on the existing authentication and attempt model when deciding whether to introduce this contract. It is a design proposal, not the current API.
 
 | Method | Proposed route | Purpose |
 | --- | --- | --- |

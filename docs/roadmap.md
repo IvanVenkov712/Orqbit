@@ -1,14 +1,23 @@
 # Implementation roadmap
 
-This order establishes durable state and ownership before adding automatic re-execution. All milestones below are pending unless the [status snapshot](status.md) explicitly says otherwise. Each milestone includes the non-functional work needed to trust it.
+The current prototype already has PostgreSQL persistence, authentication, permissions, attempts, atomic claims, owned outcomes, migrations, containers, and CI. The [status page](status.md) records current behavior and verification. The broader reliability milestones below include additional work that remains planned.
+
+| Milestone | Current progress |
+| --- | --- |
+| Identity, authorization, attempts | Implemented foundation; separate process identity and attempt-detail API remain |
+| Submission idempotency | Planned |
+| Atomic claims and owned acknowledgements | Claims and ownership implemented; acknowledgement replay and leases remain |
+| Heartbeats, deadlines, recovery | Planned |
+| Retries and complete history API | Attempt records exist; retry scheduling and detailed history routes remain |
+| Operations | Compose, readiness, and CI implemented; metrics, resource limits, load tests, and backup/restore remain |
 
 ## 1. Identity, authorization, and attempt model
 
-Define authenticated client/worker principals, stable creator attribution, worker process instances, permitted job types, and access rules. A practical MVP can use separately provisioned, revocable service credentials; broader identity-provider integration can follow. Add attempt storage, foreign keys, uniqueness constraints, and a paginated authorized history/read API.
+User JWT authentication, hashed worker API keys, authenticated creator attribution, permission policies, supported types, attempt storage, foreign keys, and attempt uniqueness constraints are implemented. Workers are registered credentials rather than independently fenced process instances. Remaining extensions include credential rotation/revocation management and an authorized attempt-detail/history API; job reads currently expose attempt IDs only.
 
-Decide whether tenant isolation is required now. Add request validation, body size limits, pagination, secret redaction, and request/job correlation IDs before a public pilot.
+Request validation and limit/offset pagination are implemented. Body size limits and request/job correlation IDs remain. Decide tenant-isolation and operational requirements before a public pilot.
 
-**Done when:** creator identity cannot be forged in a body field; a worker cannot impersonate another instance; unauthorized reads and updates are rejected; persisted attempt records retain worker attribution.
+**Verified foundation:** creator identity comes from authentication, unauthorized reads/claims/outcomes are rejected, and attempts retain worker attribution. Separate process-instance fencing and full history access have not been established.
 
 ## 2. Idempotent submission
 
@@ -18,11 +27,13 @@ Implement creator-scoped keys, canonical request fingerprints, retention rules, 
 
 ## 3. Atomic claims and owned acknowledgements
 
-Implement due-job claims with PostgreSQL row locking, create the attempt/assignment/lease atomically, and return attempt credentials. Add conditional, attempt-scoped success/failure updates and idempotent exact acknowledgement replay. Keep transactions short and configure database connection/statement timeouts.
+Oldest-eligible pending claims use `FOR UPDATE SKIP LOCKED` and atomically create an owned running attempt. Success/failure locks the attempt and checks the worker and running status before updating job and attempt together. Concurrent claims and rollback are covered by PostgreSQL tests.
+
+Remaining work includes due-time scheduling, lease metadata/fencing, exact acknowledgement replay, competing outcome-report regression tests, and deliberate API-query timeout policy. Current repeated acknowledgements return 400. Database connection timeouts and readiness statement timeouts already exist.
 
 **Done when:** concurrent claimers never obtain two active attempts for one job; workers cannot finish another worker's attempt; competing success/failure reports resolve to one outcome; accepted acknowledgement retries are safe.
 
-The lease is established here; automatic expiry processing comes next. Do not enable multiple real workers before ownership and concurrency checks pass.
+Claim exclusivity and worker ownership checks now pass. Leases are a future extension; a worker crash can still leave a job running permanently. Define their contract before adding automatic expiry processing.
 
 ## 4. Heartbeats, deadlines, and crash recovery
 
@@ -46,4 +57,4 @@ Complete metrics, structured logs, dashboards/alerts, rate limits, queue quotas,
 
 Consider audited manual replay, cancellation, priorities/fairness, scheduled jobs, longer polling, batching, per-tenant concurrency quotas, webhooks, SDKs, and payload storage outside PostgreSQL. Design webhook delivery with its own retry/idempotency model. Consider recurring jobs, workflows/dependencies, and broker integration only after the core reliability model is proven.
 
-The first usable durable MVP includes milestones 1–6 plus the release-gate requirements appropriate to its deployment. Completion is determined by acceptance evidence, not by having endpoint names present.
+These later reliability and operational milestones describe future direction. They do not expand the learning MVP by default; implement a small, explicitly scoped increment with tests when it is needed. Completion is determined by acceptance evidence, not by having endpoint names present.

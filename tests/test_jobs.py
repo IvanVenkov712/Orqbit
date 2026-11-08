@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, event, func, select
 from sqlalchemy.orm import Session
 
 from models.job import Job, JobStatus, PermissionPolicy
@@ -16,6 +16,7 @@ def test_create_and_read_job_preserves_json(client, database, user, user_headers
         "message": "Здравей",
         "options": {"enabled": True, "disabled": False},
         "values": [1, 2.5, None, {"nested": "value"}],
+        "literal_escape": r"\u0000",
     }
     response = client.post(
         "/jobs/",
@@ -63,6 +64,8 @@ def test_create_and_read_job_preserves_json(client, database, user, user_headers
         {"job_type": "example", "params": {}, "permission_policy": "unknown"},
         {"job_type": "example", "params": {}, "permitted_user_ids": [0]},
         {"job_type": "example", "params": {}, "permitted_worker_ids": [-1]},
+        {"job_type": "example", "params": {"nested": ["\x00"]}},
+        {"job_type": "example", "params": {"\x00": "value"}},
     ],
 )
 def test_invalid_submission_does_not_insert_job(
@@ -349,8 +352,9 @@ def test_submission_requires_permission_policy(client, database, user_headers):
 
 
 @pytest.mark.parametrize("field", ["permitted_user_ids", "permitted_worker_ids"])
+@pytest.mark.parametrize("permission_id", [2147483647, 2**31, 2**63])
 def test_submission_rejects_nonexistent_permissions(
-    client, database, user_headers, field
+    client, database, user_headers, field, permission_id
 ):
     response = client.post(
         "/jobs/",
@@ -359,7 +363,7 @@ def test_submission_rejects_nonexistent_permissions(
             "job_type": "example",
             "params": {},
             "permission_policy": "ALL",
-            field: [2147483647],
+            field: [permission_id],
         },
     )
 
@@ -484,7 +488,7 @@ def test_claim_rejects_invalid_or_inactive_worker(
     ("endpoint", "field"), [("succeed", "result"), ("fail", "error")]
 )
 @pytest.mark.parametrize(
-    "target", ["missing", "other-worker", "no-key", "invalid-payload"]
+    "target", ["missing", "other-worker", "no-key", "invalid-payload", "null-character"]
 )
 def test_outcome_rejection_preserves_running_attempt(
     client, database, claim_worker, worker_factory, endpoint, field, target
@@ -509,8 +513,11 @@ def test_outcome_rejection_preserves_running_attempt(
     elif target == "no-key":
         headers = {}
         expected = 401
-    else:
+    elif target == "invalid-payload":
         payload = {field: []}
+        expected = 422
+    else:
+        payload = {field: {"nested": ["\x00"]}}
         expected = 422
 
     response = client.post(
@@ -526,3 +533,95 @@ def test_outcome_rejection_preserves_running_attempt(
         for record in (attempt, attempt.job):
             assert record.result is None
             assert record.error is None
+
+
+@pytest.mark.parametrize("resource_id", [2**31, 2**63])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/jobs/{id}",
+        "/jobs?owner_id={id}",
+        "/workers/{id}",
+        "/workers?owner_id={id}",
+        "/workers/{id}/succeed",
+        "/workers/{id}/fail",
+    ],
+)
+def test_oversized_ids_return_422(
+    client, user_headers, claim_worker, path, resource_id
+):
+    _, worker_headers = claim_worker
+    path = path.format(id=resource_id)
+    if path.endswith(("/succeed", "/fail")):
+        field = "result" if path.endswith("/succeed") else "error"
+        response = client.post(path, headers=worker_headers, json={field: {}})
+    else:
+        response = client.get(path, headers=user_headers)
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Input contains a value PostgreSQL cannot store"
+    }
+
+
+def test_list_jobs_loads_attempts_in_one_query(
+    client, database, user_headers, claim_worker
+):
+    from database import engine
+
+    worker, _ = claim_worker
+    with Session(database) as session:
+        jobs = [
+            Job(
+                job_type="example",
+                params={},
+                user_id=worker.user_id,
+                status=JobStatus.RUNNING,
+                attempts=[JobAttempt(worker_id=worker.id, attempt_number=1, params={})],
+            )
+            for _ in range(3)
+        ]
+        session.add_all(jobs)
+        session.commit()
+        expected = {job.id: [attempt.id for attempt in job.attempts] for job in jobs}
+
+    attempt_queries = []
+
+    def count_attempt_queries(connection, cursor, statement, parameters, context, many):
+        if "FROM job_attempts" in statement:
+            attempt_queries.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count_attempt_queries)
+    try:
+        response = client.get("/jobs", headers=user_headers)
+    finally:
+        event.remove(engine, "before_cursor_execute", count_attempt_queries)
+
+    assert response.status_code == 200
+    assert {job["id"]: job["attempt_ids"] for job in response.json()} == expected
+    assert len(attempt_queries) == 1
+
+
+@pytest.mark.parametrize(
+    ("job_type", "expected_status"),
+    [("", 422), ("   ", 422), ("x" * 101, 422), ("x" * 100, 200), ("example", 200)],
+)
+def test_worker_supported_types_use_job_type_rules(
+    client, database, user_headers, job_type, expected_status
+):
+    response = client.post(
+        "/workers",
+        headers=user_headers,
+        json={
+            "name": "type-test",
+            "permission_policy": "PRIVATE",
+            "supported_types": [job_type],
+        },
+    )
+
+    assert response.status_code == expected_status
+    with Session(database) as session:
+        workers = session.scalars(select(Worker)).all()
+        assert len(workers) == int(expected_status == 200)
+        if workers:
+            assert [item.type_name for item in workers[0].supported_types] == [job_type]

@@ -8,7 +8,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from database import readiness_engine
-from models.job import Job
+from models.base import Base
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 REQUIRED_HEADS = set(ScriptDirectory(str(MIGRATIONS)).get_heads())
@@ -26,8 +26,9 @@ def database_is_ready() -> bool:
                 return False
 
             # A version stamp alone cannot prove that the actual tables exist.
-            # LIMIT 0 checks every mapped column without reading queued jobs.
-            connection.execute(select(Job.__table__).limit(0))
+            # LIMIT 0 checks mapped columns without reading application data.
+            for table in Base.metadata.tables.values():
+                connection.execute(select(table).limit(0))
         return True
     except SQLAlchemyError:
         # Never put connection strings, credentials, or SQL in HTTP responses.

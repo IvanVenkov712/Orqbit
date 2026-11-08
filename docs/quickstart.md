@@ -1,10 +1,10 @@
-# Clean-checkout demonstration
+# Docker and PowerShell quickstart
 
-These commands use PowerShell, Git, and a running Docker engine in Linux-container mode. Docker Compose must support `up --wait`. No host Python environment, PostgreSQL installation, or dependency installation is required.
+Use PowerShell, Git, and a running Docker engine in Linux-container mode. Docker Compose must support `up --wait`. No host Python environment or PostgreSQL installation is required. Run these steps in one PowerShell session so the login token and job ID remain available.
 
-## 1. Get the source and configure local credentials
+## 1. Configure the stack
 
-Start in a fresh PowerShell window without exported Orqbit database variables. Shell environment variables take precedence over `--env-file`.
+For a new checkout:
 
 ```powershell
 git clone https://github.com/IvanVenkov712/Orqbit.git Orqbit-demo
@@ -12,77 +12,109 @@ Set-Location Orqbit-demo
 Copy-Item .env.compose.example .env.compose
 ```
 
-Edit `.env.compose` before starting. Choose a local password, updating both `POSTGRES_PASSWORD` and the password in `DATABASE_URL`. Keep the database hostname as `db`, not `localhost`, and ensure the user/database values match. URL-encode reserved characters in the URL password. These credentials are for this local development stack; production credentials must be supplied separately. The real environment file is ignored by Git and excluded from the image.
+If using an existing checkout, work in its root and retain any existing `.env.compose` settings. Shell environment variables override `--env-file`; use a fresh shell without exported Orqbit settings if you want the file to control configuration.
 
-The API defaults to port 8000. If it is occupied, change `API_PORT` in `.env.compose` and use that port below:
+Edit `.env.compose`: choose a local database password and put it in both `POSTGRES_PASSWORD` and `DATABASE_URL`. Keep the URL hostname as `db` and match the user/database names. URL-encode reserved characters in the URL password.
+
+Generate a signing key using PowerShell:
+
+```powershell
+$keyBytes = New-Object byte[] 32
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($keyBytes)
+$rng.Dispose()
+-join ($keyBytes | ForEach-Object { $_.ToString("x2") })
+```
+
+Replace `SECRET_KEY=replace_with_secret_key` in `.env.compose` with that output. It must be 64 lowercase hexadecimal characters. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES` (the example uses 30). The lease settings must be positive but currently enable no lease or heartbeat behavior. The real environment file is ignored by Git and excluded from the image.
+
+Set the URL to match `API_PORT` in the file, then validate Compose interpolation:
 
 ```powershell
 $api = "http://127.0.0.1:8000"
 docker compose --env-file .env.compose config --quiet
 ```
 
+`config --quiet` checks Compose configuration, not application settings such as the signing-key format.
+
 ## 2. Build, migrate, and start
 
 ```powershell
-docker compose --env-file .env.compose build
-docker compose --env-file .env.compose up --wait --wait-timeout 120 db
-docker compose --env-file .env.compose run --rm migrate
-docker compose --env-file .env.compose up --wait --wait-timeout 120 api
+docker compose --env-file .env.compose up --build --wait --wait-timeout 120 api
 docker compose --env-file .env.compose ps --all
 Invoke-RestMethod -Uri "$api/health/live"
 Invoke-RestMethod -Uri "$api/health/ready"
 ```
 
-Expect liveness `{"status":"ok"}` and readiness `{"status":"ready"}`. `up --wait ... api` waits for the API's readiness health check, not only for its process to start. Readiness checks PostgreSQL, the Alembic revision, and the required job table columns.
+Compose waits for PostgreSQL, runs the one-shot Alembic migration service, and starts the API when migrations succeed. A successful migration container exits with code 0. Expect liveness `{"status":"ok"}` and readiness `{"status":"ready"}`. Readiness checks database access, migration heads, and every mapped table/column.
 
-The separate `migrate` service runs `alembic upgrade head`. Starting the API also runs its migration dependency, so an already applied migration is checked again without modifying existing jobs. A successful one-shot migration container exits with code 0. On a migration failure, the API is not started. Diagnose startup with:
+If startup fails:
 
 ```powershell
 docker compose --env-file .env.compose logs db migrate api
 ```
 
-For later starts, the shorter equivalent is `docker compose --env-file .env.compose up --build --wait --wait-timeout 120 api`.
+An existing database with legacy jobs may need preparation before migration; see [migration notes](development.md#existing-databases).
 
-## 3. Create and read a job
+## 3. Register and log in
 
-Keep using the same PowerShell window so the job ID and expected response remain available:
+Choose a password containing 6?20 characters, using only ASCII letters, digits, and `@`, `$`, `#`, `%`. Include at least one uppercase letter, lowercase letter, digit, and one of those symbols.
 
 ```powershell
-$job = Invoke-RestMethod -Method Post -Uri "$api/jobs/" -ContentType application/json -Body '{"job_type":"example","params":{"hello":"world","values":[true,null,3]}}'
-$before = Invoke-RestMethod -Uri "$api/jobs/$($job.id)"
+$password = Read-Host "Choose a demo password matching the rules above"
+$registration = @{
+    username = "demo-user"
+    email = "demo@example.com"
+    full_name = "Demo user"
+    password = $password
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "$api/auth/register" -ContentType application/json -Body $registration
+
+$login = @{ username = "demo-user"; password = $password }
+$token = Invoke-RestMethod -Method Post -Uri "$api/auth/login" -ContentType application/x-www-form-urlencoded -Body $login
+$headers = @{ Authorization = "Bearer $($token.access_token)" }
+```
+
+Registration is needed once per database. If the account already exists, log in with its original password. Login uses form data; registration uses JSON. Tokens expire after `ACCESS_TOKEN_EXPIRE_MINUTES`; repeat the login commands if necessary.
+
+## 4. Create and read a private job
+
+```powershell
+$job = Invoke-RestMethod -Method Post -Uri "$api/jobs/" -Headers $headers -ContentType application/json -Body '{"job_type":"example","params":{"hello":"world","values":[true,null,3]},"permission_policy":"PRIVATE"}'
+$before = Invoke-RestMethod -Uri "$api/jobs/$($job.id)" -Headers $headers
 $expected = $before | ConvertTo-Json -Depth 20 -Compress
 $before
 ```
 
-Expect the returned job ID, the submitted parameters, and status `PENDING`. No worker is included, so the job stays pending during this demonstration.
+The response includes the job ID, authenticated `user_id`, submitted parameters, `PENDING` status, null result/error, and empty `attempt_ids`. No worker executes it in this demonstration. To register a worker and exercise claiming/reporting, see the [API workflow](api.md#worker-workflow).
 
-## 4. Recreate containers and verify persistence
+## 5. Recreate containers and verify persistence
 
 ```powershell
 docker compose --env-file .env.compose down
 docker compose --env-file .env.compose up --wait --wait-timeout 120 api
 Invoke-RestMethod -Uri "$api/health/ready"
-$after = Invoke-RestMethod -Uri "$api/jobs/$($job.id)"
+$after = Invoke-RestMethod -Uri "$api/jobs/$($job.id)" -Headers $headers
 if (($after | ConvertTo-Json -Depth 20 -Compress) -ne $expected) {
     throw "The saved job changed across container recreation"
 }
 Write-Output "Job $($after.id) survived container recreation."
 ```
 
-Both reads should return the same job. The named PostgreSQL volume survives the `down` command even though the containers are deleted.
+The volume preserves both the user and job. Keep the same signing key so unexpired tokens remain valid, or log in again after recreation. For an explicit migration rerun:
 
-## 5. Stop
+```powershell
+docker compose --env-file .env.compose run --rm migrate
+```
+
+## 6. Stop
 
 ```powershell
 docker compose --env-file .env.compose down
 ```
 
-Your jobs remain in the volume for the next start. Adding `--volumes` to this command **deletes the database volume and every stored job**. Changing the Compose project name or using another checkout directory selects a different project volume by default; continue using the same directory to keep using this database.
-
-## Verification result
-
-Verified on 2026-11-04 from a fresh GitHub clone at commit `0ae6f8b`, using the commands above with API port 18002. Build, migration, and startup succeeded. Job 1 returned identical JSON before and after container recreation. The services were stopped afterward with the database volume retained. No existing environment files, virtual environment, or database were copied into the checkout.
+Ordinary `down` retains the named database volume. Adding `--volumes` deletes that volume and its data. Use the same checkout directory and Compose project name to keep selecting the same volume. Changing credentials in `.env.compose` does not change credentials already initialized inside an existing PostgreSQL volume.
 
 ## Automated verification
 
-The separate `python tests/compose_smoke.py` check is configured in CI. It creates a private Compose project with generated credentials, checks readiness and liveness, tests an actual database outage and recovery, and verifies job persistence after container recreation. It removes only that test project's containers and volume afterward. This automated check requires Python, while the manual Docker workflow above does not.
+`python tests/compose_smoke.py` runs a separate generated Compose project, registers/logs in a user, and tests authenticated job persistence, migrations, database outage/reconnection, and container recreation. It supplies its own signing key and credentials and removes its own containers/volume afterward. It requires host Python and Docker, but no `.env.compose` file. See [testing](testing.md) for commands and [status](status.md#verification-performed) for recorded results; the revised manual commands have not been re-executed end to end against Docker during this documentation refresh.

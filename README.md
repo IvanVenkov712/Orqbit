@@ -1,114 +1,63 @@
 # Orqbit
 
-Orqbit is an asynchronous job processing platform: clients submit jobs, and workers pull jobs they know how to execute. The intended design uses PostgreSQL for durable queue state, worker leases, retries, idempotency, and execution history.
+Orqbit is a Python backend for asynchronous job processing. Clients submit jobs over HTTP; independent workers pull compatible jobs, execute them outside the API, and report outcomes. PostgreSQL stores jobs, permissions, and execution attempts.
 
-**Status: early prototype.** Job submission, retrieval, claiming by type, success/failure reporting, PostgreSQL configuration, Alembic migrations, and database/schema readiness checks exist. Authentication, heartbeats, recovery, retries, idempotency, and attempt history are still planned. Concurrent claiming is currently unsafe. See the [implementation status and known problems](docs/status.md) before running multiple workers.
+**Status: learning prototype.** User authentication, worker API keys, permission-aware reads, paginated lists, atomic claims, and owned success/failure reporting are implemented. Heartbeats, lease recovery, retries, and submission/acknowledgement idempotency remain planned. A crashed worker can leave a job running indefinitely. See [implementation status](docs/status.md) for the current guarantees and limitations.
 
-## Intended capabilities
+## Current workflow
 
-- Client API to submit jobs and inspect their status and results.
-- Worker API to claim pending jobs by supported type.
-- Authenticated creator identity and worker ownership of each execution attempt.
-- Worker heartbeats and per-attempt leases to recover abandoned jobs.
-- Bounded retries with backoff and a terminal failure state.
-- PostgreSQL persistence with versioned database migrations.
-- Docker Compose for a repeatable local environment.
-- Idempotent submission and safe retries of worker acknowledgements.
-- A durable record of every execution attempt, including its worker and outcome.
+1. Register and log in a user to obtain a bearer token.
+2. Submit a job with a type, JSON parameters, and permission policy.
+3. Register a worker with supported job types and save its returned API key.
+4. The worker claims an accessible pending job using `X-API-Key` and no request body.
+5. The worker executes the job independently and reports by the returned **attempt ID**.
+6. The client reads the job's status, result/error, and attempt IDs.
 
-Orqbit is intended to provide **at-least-once execution**. Workers must make external side effects idempotent: a worker can finish an action and crash before reporting success. An idempotency key on job submission alone cannot prevent that duplicate action.
+```text
+PENDING -> RUNNING -> SUCCEEDED
+                  \-> FAILED
+```
 
-## Current implementation
+Claims use a PostgreSQL transaction with `FOR UPDATE SKIP LOCKED`; claiming creates an attempt and marks the job running in that transaction. Outcome reports lock the attempt, check worker ownership and running status, and update job and attempt together. These operations coordinate work; the API does not execute worker handlers. No worker executable or SDK is included.
 
-The repository uses Python, FastAPI, Pydantic, and synchronous SQLAlchemy sessions with PostgreSQL. Workers execute application-specific job handlers outside the API process; no worker executable or SDK is included yet.
+The [API reference](docs/api.md) covers authentication, job and worker routes, permission policies, list filters, and current errors. Interactive OpenAPI documentation is available at `/docs` while the API runs.
 
-| Method | Route | Behavior today |
-| --- | --- | --- |
-| POST | `/jobs/` | Create a pending job |
-| GET | `/jobs` | List all jobs, without pagination |
-| GET | `/jobs/{job_id}` | Read a job |
-| POST | `/workers/claim` | Claim the oldest matching pending job by ID |
-| POST | `/workers/{job_id}/succeed` | Mark a running job successful |
-| POST | `/workers/{job_id}/fail` | Mark a running job failed |
+## Run with Docker Compose
 
-These are prototype routes. They do not authenticate callers or enforce worker ownership. A failed job remains failed; it is not retried automatically. Request examples and current response behavior are in the [API documentation](docs/api.md).
+Use the [PowerShell quickstart](docs/quickstart.md) for configuration, signing-key generation, startup, authenticated submission, and persistence across container recreation. It requires Git and Docker in Linux-container mode; host Python and PostgreSQL are unnecessary.
 
-## Running the prototype
+Compose runs PostgreSQL, an explicit Alembic migration service, and the API. `GET /health/live` checks liveness; `/health` is an alias. `GET /health/ready` requires database access, matching migration heads, and queryable mapped tables/columns. Health checks never apply migrations. The named database volume survives ordinary `docker compose down`.
 
-Use Python 3.13 and uv. With PostgreSQL running and an empty `orqbit` database already created, run from the repository root:
+## Run Python on your host
+
+Use Python 3.13 and uv. Create a PostgreSQL database named `orqbit`, then run from the repository root:
 
 ```powershell
 uv sync --locked
 Copy-Item .env.example .env
+uv run --locked python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Edit `.env` with your local PostgreSQL credentials. The example credentials are for local development; supply credentials through the environment in production. The real `.env` is ignored by Git. Then run:
+Edit `.env`: set `DATABASE_URL` to your local credentials and replace `SECRET_KEY=replace_with_secret_key` with the generated 64-character hexadecimal value. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES`. `LEASE_SECONDS` and `PROTRACTION_SECONDS` must also be positive, although lease/heartbeat behavior is not implemented. The real environment files are ignored by Git.
 
 ```powershell
 uv run --locked alembic upgrade head
 uv run --locked uvicorn main:app --app-dir src --reload
 ```
 
-The server defaults to `http://127.0.0.1:8000`; interactive API documentation is available at `/docs`. Importing the app does not create tables; migrations are an explicit step.
-
-PostgreSQL integration tests and the GitHub Actions workflow are included. See [development and verification](docs/development.md#postgresql-integration-tests) for test database setup and commands.
-
-## Running with Docker Compose
-
-For the full build, migration, job creation, and persistence demonstration from a fresh checkout, follow the [clean-checkout guide](docs/quickstart.md).
-
-With Docker running in Linux container mode and Docker Compose v2 or later, copy the local container settings from the repository root:
-
-```powershell
-Copy-Item .env.compose.example .env.compose
-```
-
-Edit `.env.compose` to choose your local database password, updating both `POSTGRES_PASSWORD` and `DATABASE_URL` to match. Use `db` as the database hostname inside Compose. Keep `.env` for running Python on your host; `.env.compose` is a separate, ignored local file. The image contains neither file and has no credential defaults.
-
-Build and start the stack:
-
-```powershell
-docker compose --env-file .env.compose up --build --wait --wait-timeout 120 api
-docker compose --env-file .env.compose ps --all
-docker compose --env-file .env.compose logs migrate
-```
-
-Compose waits for PostgreSQL's health check, runs `alembic upgrade head` in the one-shot `migrate` service, then starts the API and waits for its readiness health check. A successful migration container remains exited with code 0. Open `http://127.0.0.1:8000/docs`. Set `API_PORT` in `.env.compose` if port 8000 is already in use. PostgreSQL is available only inside the Compose network.
-
-Create a job and read it back in PowerShell:
-
-```powershell
-$job = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/jobs/ -ContentType application/json -Body '{"job_type":"example","params":{"hello":"world"}}'
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/jobs/$($job.id)"
-```
-
-Recreate the containers and read the same job again:
-
-```powershell
-docker compose --env-file .env.compose down
-docker compose --env-file .env.compose up --wait --wait-timeout 120 api
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/jobs/$($job.id)"
-```
-
-The named database volume survives `down`. Adding `--volumes` to `down` deletes the stored jobs. See [container development and verification](docs/development.md#docker-and-compose) for explicit migration commands and the automated smoke check.
-
-`GET /health/live` returns 200 while the API responds; `/health` remains an alias. `GET /health/ready` returns 200 only when PostgreSQL is reachable, its migration revision matches this application, and the required job table columns can be queried. It returns 503 otherwise. Health checks never run migrations or expose database credentials.
+The API defaults to `http://127.0.0.1:8000`. Importing the app does not create tables. See [development](docs/development.md) for configuration and existing-database migration notes, and [testing](docs/testing.md) for PostgreSQL test setup and CI commands.
 
 ## Documentation
 
-- [Status and current problems](docs/status.md): what exists, what is missing, and verification evidence.
-- [Architecture and reliability](docs/architecture.md): proposed data model, ownership, leases, retries, and idempotency.
-- [API](docs/api.md): existing endpoints and proposed contract changes.
-- [Implementation roadmap](docs/roadmap.md): dependency-ordered milestones and acceptance criteria.
-- [Requirements](docs/requirements.md): functional scope, non-functional requirements, and important additions.
-- [Development](docs/development.md): repository layout, launch limitations, and validation strategy.
-- [Clean-checkout guide](docs/quickstart.md): exact Docker commands and job persistence demonstration.
+- [Status and limitations](docs/status.md): implemented behavior and verification evidence.
+- [API](docs/api.md): current requests, authentication, permissions, and responses.
+- [Quickstart](docs/quickstart.md): runnable Docker and PowerShell demonstration.
+- [Development](docs/development.md): repository layout, configuration, migrations, and containers.
+- [Testing](docs/testing.md): integration coverage and the separate Compose smoke check.
+- [Roadmap](docs/roadmap.md): completed foundations and remaining work.
+- [Architecture](docs/architecture.md) and [requirements](docs/requirements.md): future reliability proposals, including leases, retries, and idempotency.
 
-The status and current API sections describe existing code. Target designs and roadmap items are proposals, not implemented behavior.
-
-## Recommended next step
-
-Add authenticated identities and attempt records before implementing atomic claims, lease recovery, and retries. Submission idempotency should ship with the first usable client API. The [roadmap](docs/roadmap.md) gives the full order and release gates.
+There is no exactly-once execution guarantee. Future retries will require idempotent worker side effects; submission deduplication alone cannot prevent a worker from repeating an external action.
 
 ## License
 

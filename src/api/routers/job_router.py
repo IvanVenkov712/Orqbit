@@ -1,6 +1,7 @@
 import fastapi
 from fastapi import HTTPException, Query
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from database import SessionDep
 from dto.job import JobCreate, JobRead
@@ -50,7 +51,7 @@ def list_jobs(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
-    stmt = accessible_user_jobs_query(user)
+    stmt = accessible_user_jobs_query(user).options(selectinload(Job.attempts))
 
     if owner_id is not None:
         stmt = stmt.where(Job.user_id == owner_id)

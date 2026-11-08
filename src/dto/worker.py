@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
 from models.worker import PermissionPolicy
@@ -5,7 +7,9 @@ from models.worker import PermissionPolicy
 
 class WorkerBase(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9_-]{3,16}$")
-    supported_types: set[str] = Field(min_length=1)
+    supported_types: set[
+        Annotated[str, Field(min_length=1, max_length=100, pattern=r"\S")]
+    ] = Field(min_length=1)
     permission_policy: PermissionPolicy
     permitted_user_ids: list[PositiveInt] = Field(default_factory=list)
 

@@ -2,6 +2,7 @@
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DataError
 
 from api.routers.auth_router import auth_router
 from api.routers.claim_router import claim_router
@@ -18,6 +19,14 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(user_router)
 app.include_router(worker_router)
+
+
+@app.exception_handler(DataError)
+async def invalid_database_value(request: Request, exc: DataError):
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "Input contains a value PostgreSQL cannot store"},
+    )
 
 
 @app.exception_handler(RequestValidationError)

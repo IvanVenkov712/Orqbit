@@ -4,6 +4,8 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
+from models.base import Base
+
 
 def assert_live(client):
     for path in ("/health", "/health/live"):
@@ -107,5 +109,30 @@ def test_locked_schema_times_out_as_not_ready(client, database):
             assert_not_ready(client)
         finally:
             transaction.rollback()
+
+    assert client.get("/health/ready").status_code == 200
+
+
+@pytest.mark.parametrize("table", list(Base.metadata.tables))
+@pytest.mark.parametrize("missing", ["table", "column"])
+def test_missing_application_table_or_column_is_not_ready(
+    client, database, table, missing
+):
+    # Names come only from the application's metadata, never from request input.
+    if missing == "table":
+        break_sql = f'ALTER TABLE "{table}" RENAME TO saved_table'
+        restore_sql = f'ALTER TABLE saved_table RENAME TO "{table}"'
+    else:
+        column = next(iter(Base.metadata.tables[table].columns)).name
+        break_sql = f'ALTER TABLE "{table}" RENAME COLUMN "{column}" TO saved_column'
+        restore_sql = f'ALTER TABLE "{table}" RENAME COLUMN saved_column TO "{column}"'
+
+    with database.begin() as connection:
+        connection.execute(text(break_sql))
+    try:
+        assert_not_ready(client)
+    finally:
+        with database.begin() as connection:
+            connection.execute(text(restore_sql))
 
     assert client.get("/health/ready").status_code == 200
