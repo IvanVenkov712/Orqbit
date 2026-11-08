@@ -43,7 +43,7 @@ class Job(Base, TimestampMixin):
     )
 
     permission_policy: Mapped[PermissionPolicy] = mapped_column(
-        Enum(PermissionPolicy),
+        Enum(PermissionPolicy, name="job_permission_policy"),
         default=PermissionPolicy.PRIVATE
     )
 

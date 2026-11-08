@@ -30,7 +30,8 @@ class Worker(Base, TimestampMixin):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     
     permission_policy: Mapped[PermissionPolicy] = mapped_column(
-        Enum(PermissionPolicy), default=PermissionPolicy.ALL
+        Enum(PermissionPolicy, name="worker_permission_policy"), 
+        default=PermissionPolicy.ALL,
     )
 
     user: Mapped["User"] = relationship(

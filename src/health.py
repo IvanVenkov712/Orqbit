@@ -8,7 +8,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from database import readiness_engine
-from models import Job
+from models.job import Job
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 REQUIRED_HEADS = set(ScriptDirectory(str(MIGRATIONS)).get_heads())
