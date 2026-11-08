@@ -1,6 +1,13 @@
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, PositiveInt, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    PositiveInt,
+    field_validator,
+)
 
 from models.job import JobStatus, PermissionPolicy
 from models.job_attempts import JobAttempt

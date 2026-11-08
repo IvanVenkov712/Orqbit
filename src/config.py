@@ -1,6 +1,3 @@
-from typing import Any, Self
-
-import pydantic
 from pydantic import Field, PositiveInt, PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

@@ -9,8 +9,6 @@ from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .job_attempts import JobAttempt
-    from .job_permitted_users import PermittedUser
-    from .job_permitted_workers import PermittedWorker
     from .user import User
     from .worker import Worker
 
