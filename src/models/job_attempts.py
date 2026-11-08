@@ -27,6 +27,8 @@ class JobAttempt(Base, TimestampMixin):
         Enum(AttemptStatus), default=AttemptStatus.RUNNING
     )
 
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

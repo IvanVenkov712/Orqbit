@@ -7,41 +7,10 @@ from dto.job import JobCreate, JobRead
 from models.job import Job, JobStatus, PermissionPolicy
 from models.user import User
 from models.worker import Worker
+from services.job import accessible_jobs_query, job_accessible
 from services.user_auth import CurrentUser
 
 job_router = fastapi.APIRouter()
-
-def accessible_jobs_query(user: User):
-    return select(Job).where(
-        or_(
-            Job.user_id == user.id,
-
-            Job.permission_policy == PermissionPolicy.ALL,
-
-            and_(
-                Job.permission_policy.in_([
-                    PermissionPolicy.PERMITTED_USERS,
-                    PermissionPolicy.PERMITTED_WORKERS_AND_USERS,
-                ]),
-                Job.permitted_users.any(User.id == user.id),
-            ),
-        )
-    )
-
-def job_accessible(job: Job, user: User) -> bool:
-
-    if job.permission_policy == PermissionPolicy.ALL:
-        return True
-
-    if job.user_id == user.id:
-        return True
-
-    if job.permission_policy in [PermissionPolicy.PERMITTED_USERS,
-                                 PermissionPolicy.PERMITTED_WORKERS_AND_USERS]:
-        return any(p_user.id == user.id for p_user in job.permitted_users)
-
-    return False
-
 
 @job_router.post(path="/jobs/", response_model=JobRead)
 def create_job(payload: JobCreate, session: SessionDep, user: CurrentUser):

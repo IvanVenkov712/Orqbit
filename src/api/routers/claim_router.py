@@ -6,17 +6,19 @@ from sqlalchemy import select
 from database import SessionDep
 from dto.claims import ClaimJob, CompleteJob, FailJob
 from dto.job import JobRead
+from dto.job_attempt import JobAttemptRead
 from models.job import Job, JobStatus
+from models.job_attempts import JobAttempt
+from services.job import accessible_worker_jobs
+from services.worker_auth import CurrentWorker
 
 claim_router = APIRouter()
 
-@claim_router.post(path="/workers/claim", response_model=JobRead)
-def claim_job(payload: ClaimJob, session: SessionDep):
+@claim_router.post(path="/workers/claim", response_model=JobAttemptRead)
+def claim_job(payload: ClaimJob, worker: CurrentWorker, session: SessionDep):
     stmt = (
-        select(Job).where(
-            Job.job_type.in_(payload.supported_types),
-            Job.status == JobStatus.PENDING
-        )
+        accessible_worker_jobs(worker)
+        .where(Job.job_type.in_(payload.supported_types))
         .order_by(Job.id)
         .with_for_update(skip_locked=True)
         .limit(1)
@@ -28,8 +30,16 @@ def claim_job(payload: ClaimJob, session: SessionDep):
         raise HTTPException(404, "No jobs were found")
 
     job.status = JobStatus.RUNNING
+    attempt = JobAttempt(
+        attempt_number=1,
+        job=job,
+        worker=worker,
+        params=job.params,
+    )
+    session.add(attempt)
     session.commit()
-    return job
+    session.refresh(attempt)
+    return attempt
 
 @claim_router.post(path="/workers/{job_id}/succeed", status_code=200)
 def complete_job(job_id: int, payload: CompleteJob, session: SessionDep):
