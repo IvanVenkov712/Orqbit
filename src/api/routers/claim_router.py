@@ -8,7 +8,7 @@ from dto.claims import ClaimJob, CompleteJob, FailJob
 from dto.job import JobRead
 from dto.job_attempt import JobAttemptRead
 from models.job import Job, JobStatus
-from models.job_attempts import JobAttempt
+from models.job_attempts import AttemptStatus, JobAttempt
 from services.job import accessible_worker_jobs
 from services.worker_auth import CurrentWorker
 
@@ -41,32 +41,53 @@ def claim_job(payload: ClaimJob, worker: CurrentWorker, session: SessionDep):
     session.refresh(attempt)
     return attempt
 
-@claim_router.post(path="/workers/{job_id}/succeed", status_code=200)
-def complete_job(job_id: int, payload: CompleteJob, session: SessionDep):
-    job = session.get(Job, job_id)
-    if job is None:
-        raise HTTPException(404, "Job not found")
+@claim_router.post(path="/workers/{attempt_id}/succeed", status_code=200)
+def complete_job(
+    attempt_id: int,
+    payload: CompleteJob,
+    session: SessionDep,
+    worker: CurrentWorker,
+):
+    attempt = session.get(JobAttempt, attempt_id)
+    if attempt is None or attempt.worker_id != worker.id:
+        raise HTTPException(404, "Attempt not found")
 
-    if job.status != JobStatus.RUNNING:
+    if attempt.status != AttemptStatus.RUNNING:
         raise HTTPException(HTTPStatus.BAD_REQUEST, "Job not running")
 
+
+    attempt.status = AttemptStatus.SUCCEEDED
+    attempt.result = payload.result
+
+    job = attempt.job
     job.status = JobStatus.SUCCEEDED
     job.result = payload.result
     session.commit()
-    return {}
+    return {
+        "Status": "200 OK"
+    }
 
-@claim_router.post(path="/workers/{job_id}/fail", status_code=200)
-def fail_job(job_id: int, payload: FailJob, session: SessionDep):
-    job = session.get(Job, job_id)
-    if job is None:
-        raise HTTPException(404, "Job not found")
+@claim_router.post(path="/workers/{attempt_id}/fail", status_code=200)
+def fail_job(
+    attempt_id: int,
+    payload: FailJob,
+    session: SessionDep,
+    worker: CurrentWorker,
+):
+    attempt = session.get(JobAttempt, attempt_id)
+    if attempt is None or attempt.worker_id != worker.id:
+        raise HTTPException(404, "Attempt not found")
 
-    if job.status != JobStatus.RUNNING:
-        raise HTTPException(HTTPStatus.BAD_REQUEST, "Job not running")
+    if attempt.status != AttemptStatus.RUNNING:
+        raise HTTPException(HTTPStatus.BAD_REQUEST, "Attempt not running")
 
+    attempt.status = AttemptStatus.FAILED
+    attempt.result = payload.error
+
+    job = attempt.job
     job.status = JobStatus.FAILED
-    job.error = payload.error
+    job.result = payload.error
     session.commit()
-    return {}
+    return {"Status": "200 OK"}
 
 
