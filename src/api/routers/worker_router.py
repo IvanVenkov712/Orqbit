@@ -1,5 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import selectinload
 
 from database import SessionDep
 from dto.worker import WorkerCreate, WorkerCreateResponse, WorkerRead
@@ -36,11 +37,30 @@ def worker_accessible(worker: Worker, user: User) -> bool:
 
     return False
 
+def worker_read_from_worker(worker: Worker) -> WorkerRead:
+    return WorkerRead(
+        id=worker.id,
+        name=worker.name,
+        active=worker.active,
+        user_id=worker.user_id,
+        permission_policy=worker.permission_policy,
+        supported_types=set(t.type_name for t in worker.supported_types),
+        permitted_user_ids=[u.id for u in worker.permitted_users],
+    )
+    
+
 @worker_router.post(path="/workers", response_model=WorkerCreateResponse)
 def create_worker(payload: WorkerCreate, user: CurrentUser, session: SessionDep):
     users = session.scalars(
         select(User).where(User.id.in_(payload.permitted_user_ids))
-    )
+    ).all()
+
+    if len(users) != len(set(payload.permitted_user_ids)):
+        raise HTTPException(
+            status_code=422,
+            detail="Some permitted users do not exist",
+        )
+    
     api_key = generate_api_key()
     worker = Worker(
         name=payload.name,
@@ -58,6 +78,52 @@ def create_worker(payload: WorkerCreate, user: CurrentUser, session: SessionDep)
     session.commit()
     session.refresh(worker)
 
-    response = 
+    return WorkerCreateResponse(
+        id=worker.id,
+        name=worker.name,
+        active=worker.active,
+        user_id=worker.user_id,
+        permission_policy=worker.permission_policy,
+        supported_types=set(t.type_name for t in worker.supported_types),
+        permitted_user_ids=[u.id for u in worker.permitted_users],
+        secret_api_key=api_key,
+    )
 
-    return worker
+@worker_router.get(path="/workers", response_model=list[WorkerRead])
+def list_workers(
+    user: CurrentUser,
+    session: SessionDep,
+    owner_id: int | None = None,
+    job_type: str | None = None,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    stmt = accessible_workers_query(user)
+
+    if owner_id is not None:
+        stmt = stmt.where(Worker.user_id == owner_id)
+
+    if job_type is not None:
+        stmt = stmt.where(
+            Worker.supported_types.any(SupportedJobType.type_name == job_type)
+        )
+
+    stmt = stmt.order_by(Worker.id.desc()).offset(offset).limit(limit)
+
+    stmt = stmt.options(
+        selectinload(Worker.supported_types),
+        selectinload(Worker.permitted_users),
+    )
+
+    return [
+        worker_read_from_worker(worker) for worker in session.scalars(stmt).all()
+    ]
+
+@worker_router.get(path="/workers/{worker_id}", response_model=WorkerRead)
+def get_worker(worker_id: int, session: SessionDep, user: CurrentUser):
+    worker = session.get(Worker, worker_id)
+
+    if worker is None or not worker_accessible(worker, user):
+        raise HTTPException(404, "Worker not found")
+
+    return worker_read_from_worker(worker)

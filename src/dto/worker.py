@@ -5,17 +5,17 @@ from models.worker import PermissionPolicy
 
 class WorkerBase(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9_-]{3,16}$")
-    supported_types: list[str]
+    supported_types: set[str] = Field(min_length=1)
     permission_policy: PermissionPolicy
-    permitted_user_ids: list[PositiveInt]
+    permitted_user_ids: list[PositiveInt] = Field(default_factory=list)
 
 class WorkerCreate(WorkerBase):
     pass
 
-class WorkerRead(BaseModel):
+class WorkerRead(WorkerBase):
     id: PositiveInt
     active: bool
-    user_id: str
+    user_id: int
     
     model_config = ConfigDict(from_attributes=True)
     
