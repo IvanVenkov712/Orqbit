@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import and_, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from database import SessionDep
@@ -75,7 +76,14 @@ def create_worker(payload: WorkerCreate, user: CurrentUser, session: SessionDep)
     )
 
     session.add(worker)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing_id = session.scalar(select(Worker.id).where(Worker.name == payload.name))
+        if existing_id is not None:
+            raise HTTPException(409, "Worker name already exists") from None
+        raise
     session.refresh(worker)
 
     return WorkerCreateResponse(

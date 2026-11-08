@@ -1,3 +1,5 @@
+import re
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from models.user import UserRole
@@ -17,4 +19,8 @@ class UserRead(UserBase):
     model_config = ConfigDict(from_attributes=True)
 
 class UserRegister(UserBase):
-    password: str = Field(pattern=r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$#%])[A-Za-z\d@$#%]{6,20}$")
+    password: str = Field(
+        pattern=re.compile(
+            r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$#%])[A-Za-z\d@$#%]{6,20}$"
+        )
+    )

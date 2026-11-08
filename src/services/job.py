@@ -49,10 +49,16 @@ def accessible_worker_jobs(worker: Worker):
                     ]
                 ),
 
-                or_(
-                    Job.permitted_users.any(User.id == worker.user_id),
-                    Job.permitted_workers.any(Worker.id == worker.id)
-                )
+                Job.permitted_users.any(User.id == worker.user_id),
+            ),
+            and_(
+                Job.permission_policy.in_(
+                    [
+                        PermissionPolicy.PERMITTED_WORKERS,
+                        PermissionPolicy.PERMITTED_WORKERS_AND_USERS,
+                    ]
+                ),
+                Job.permitted_workers.any(Worker.id == worker.id),
             ),
         )
     )

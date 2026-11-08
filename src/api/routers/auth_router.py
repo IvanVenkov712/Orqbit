@@ -1,9 +1,8 @@
-import re
 from typing import Annotated
 
-from email_validator import validate_email
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.exc import IntegrityError
 from starlette import status
 
 from database import SessionDep
@@ -53,7 +52,12 @@ def register(session: SessionDep, payload: UserRegister):
         hashed_password=get_password_hash(payload.password)
     )
     session.add(user)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        validate_user_not_exist(session, payload.username, payload.email)
+        raise
     session.refresh(user)
 
     return user

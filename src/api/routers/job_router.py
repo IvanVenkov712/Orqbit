@@ -1,13 +1,13 @@
 import fastapi
 from fastapi import HTTPException, Query
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 
 from database import SessionDep
 from dto.job import JobCreate, JobRead
-from models.job import Job, JobStatus, PermissionPolicy
+from models.job import Job, JobStatus
 from models.user import User
 from models.worker import Worker
-from services.job import accessible_jobs_query, job_accessible
+from services.job import accessible_user_jobs_query, job_accessible_for_user
 from services.user_auth import CurrentUser
 
 job_router = fastapi.APIRouter()
@@ -21,6 +21,11 @@ def create_job(payload: JobCreate, session: SessionDep, user: CurrentUser):
     workers = session.scalars(
         select(Worker).where(Worker.id.in_(payload.permitted_worker_ids))
     ).all()
+
+    if len(users) != len(set(payload.permitted_user_ids)):
+        raise HTTPException(422, "Some permitted users do not exist")
+    if len(workers) != len(set(payload.permitted_worker_ids)):
+        raise HTTPException(422, "Some permitted workers do not exist")
 
     job = Job(
         user=user,
@@ -45,7 +50,7 @@ def list_jobs(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
-    stmt = accessible_jobs_query(user)
+    stmt = accessible_user_jobs_query(user)
 
     if owner_id is not None:
         stmt = stmt.where(Job.user_id == owner_id)
@@ -70,7 +75,7 @@ def list_jobs(
 def get_job(job_id: int, session: SessionDep, user: CurrentUser):
     job = session.get(Job, job_id)
 
-    if job is None or not job_accessible(job, user):
+    if job is None or not job_accessible_for_user(job, user):
         raise HTTPException(404, "Job not found")
 
     return job
