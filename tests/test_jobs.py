@@ -1,10 +1,46 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from models.job import Job, JobStatus
+from models.job_attempts import JobAttempt
+from models.supported_types import SupportedJobType
+from models.user import User
+from models.worker import Worker
+
+
+@pytest.fixture
+def claim_worker(client, database):
+    from services.worker_auth import hash_api_key
+
+    api_key = "oqb_claim_test_key"
+    with Session(database, expire_on_commit=False) as session:
+        owner = User(
+            username="claim-test",
+            email="claim-test@example.com",
+            full_name="Claim test",
+            hashed_password="unused",
+            active=False,
+        )
+        worker = Worker(
+            name="claim-test",
+            user=owner,
+            secret_api_key_hash=hash_api_key(api_key),
+            supported_types=[SupportedJobType(type_name="example")],
+        )
+        session.add(worker)
+        session.commit()
+        owner_id, worker_id = owner.id, worker.id
+
+    try:
+        yield worker, {"X-API-Key": api_key}
+    finally:
+        with Session(database) as session:
+            session.execute(delete(JobAttempt).where(JobAttempt.worker_id == worker_id))
+            session.delete(session.get(User, owner_id))
+            session.commit()
 
 
 def test_create_and_read_job_preserves_json(client, database):
@@ -64,13 +100,38 @@ def test_missing_job_returns_404(client):
     assert response.json() == {"detail": "Job not found"}
 
 
-def test_claim_selects_only_supported_pending_jobs(client, database):
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        {"supported_types": ["unsupported"]},
+        {"supported_types": []},
+        {"supported_types": 123},
+    ],
+)
+def test_claim_selects_only_supported_pending_jobs(
+    client, database, claim_worker, body
+):
+    worker, headers = claim_worker
     with Session(database) as session:
+        session.add(
+            Worker(
+                name="other-worker",
+                user_id=worker.user_id,
+                secret_api_key_hash="unused-other-worker-hash",
+                supported_types=[SupportedJobType(type_name="unsupported")],
+            )
+        )
         session.add_all(
             [
-                Job(job_type="unsupported", params={}),
-                Job(job_type="example", params={}, status=JobStatus.RUNNING),
-                Job(job_type="example", params={}),
+                Job(job_type="unsupported", params={}, user_id=worker.user_id),
+                Job(
+                    job_type="example",
+                    params={},
+                    status=JobStatus.RUNNING,
+                    user_id=worker.user_id,
+                ),
+                Job(job_type="example", params={}, user_id=worker.user_id),
             ]
         )
         session.commit()
@@ -80,20 +141,83 @@ def test_claim_selects_only_supported_pending_jobs(client, database):
             )
         )
 
-    response = client.post("/workers/claim", json={"supported_types": ["example"]})
+    response = client.post(
+        "/workers/claim",
+        headers=headers,
+        **({"json": body} if body is not None else {}),
+    )
 
     assert response.status_code == 200
-    assert response.json()["id"] == eligible_id
+    assert response.json()["job_id"] == eligible_id
     assert response.json()["status"] == "RUNNING"
     with Session(database) as session:
         assert session.get(Job, eligible_id).status == JobStatus.RUNNING
+        attempt = session.get(JobAttempt, response.json()["id"])
+        assert attempt.job_id == eligible_id
+        assert attempt.worker_id == worker.id
+        assert session.scalar(select(func.count()).select_from(JobAttempt)) == 1
 
 
-def test_empty_queue_returns_404(client):
-    response = client.post("/workers/claim", json={"supported_types": ["example"]})
+def test_empty_queue_returns_404(client, claim_worker):
+    _, headers = claim_worker
+    response = client.post("/workers/claim", headers=headers)
 
     assert response.status_code == 404
     assert response.json() == {"detail": "No jobs were found"}
+
+
+def test_claim_without_stored_types_cannot_use_request_body(
+    client, database, claim_worker
+):
+    worker, headers = claim_worker
+    with Session(database) as session:
+        session.execute(
+            delete(SupportedJobType).where(SupportedJobType.worker_id == worker.id)
+        )
+        job = Job(job_type="example", params={}, user_id=worker.user_id)
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    response = client.post(
+        "/workers/claim", headers=headers, json={"supported_types": ["example"]}
+    )
+
+    assert response.status_code == 404
+    with Session(database) as session:
+        assert session.get(Job, job_id).status == JobStatus.PENDING
+        assert session.scalar(select(func.count()).select_from(JobAttempt)) == 0
+
+
+def test_claim_uses_updated_stored_types(client, database, claim_worker):
+    worker, headers = claim_worker
+    with Session(database) as session:
+        session.get(Worker, worker.id).supported_types = [
+            SupportedJobType(type_name="updated")
+        ]
+        session.add(Job(job_type="example", params={}, user_id=worker.user_id))
+        eligible = Job(job_type="updated", params={}, user_id=worker.user_id)
+        session.add(eligible)
+        session.commit()
+        eligible_id = eligible.id
+
+    response = client.post("/workers/claim", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["job_id"] == eligible_id
+    assert response.json()["job_type"] == "updated"
+
+
+def test_claim_requires_worker_api_key(client):
+    response = client.post("/workers/claim")
+
+    assert response.status_code == 401
+
+
+def test_claim_openapi_has_no_request_body(client):
+    operation = client.get("/openapi.json").json()["paths"]["/workers/claim"]["post"]
+
+    assert "requestBody" not in operation
 
 
 @pytest.mark.parametrize(

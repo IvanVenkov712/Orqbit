@@ -4,22 +4,28 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from database import SessionDep
-from dto.claims import ClaimJob, CompleteJob, FailJob
+from dto.claims import CompleteJob, FailJob
 from dto.job_attempt import JobAttemptRead
 from models.job import Job, JobStatus
 from models.job_attempts import AttemptStatus, JobAttempt
+from models.supported_types import SupportedJobType
 from services.job import accessible_worker_jobs
 from services.worker_auth import CurrentWorker
 
 claim_router = APIRouter()
 
+
 @claim_router.post(path="/workers/claim", response_model=JobAttemptRead)
-def claim_job(payload: ClaimJob, worker: CurrentWorker, session: SessionDep):
+def claim_job(worker: CurrentWorker, session: SessionDep):
     stmt = (
         accessible_worker_jobs(worker)
         .where(
             Job.status == JobStatus.PENDING,
-            Job.job_type.in_(payload.supported_types),
+            Job.job_type.in_(
+                select(SupportedJobType.type_name).where(
+                    SupportedJobType.worker_id == worker.id
+                )
+            ),
         )
         .order_by(Job.id)
         .with_for_update(skip_locked=True)

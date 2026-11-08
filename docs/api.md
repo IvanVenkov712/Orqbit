@@ -2,21 +2,21 @@
 
 ## Existing prototype routes
 
-These routes come from `src/api/routers/`. They have no authentication, version prefix, ownership enforcement, or idempotency-key handling. All successful routes currently return HTTP 200, including creation. Request validation uses FastAPI/Pydantic; invalid bodies normally return 422.
+These routes come from `src/api/routers/`. Job routes use user bearer tokens; worker claims and outcome reports use an `X-API-Key` and enforce worker ownership. There is no version prefix or idempotency-key handling. All successful routes currently return HTTP 200, including creation. Request validation uses FastAPI/Pydantic; invalid bodies normally return 422.
 
 | Method | Route | Request body | Successful response |
 | --- | --- | --- | --- |
 | POST | `/jobs/` | `job_type: string`, `params: object` | Job object |
 | GET | `/jobs` | None | Array of all jobs, ordered by ID |
 | GET | `/jobs/{job_id}` | None | Job object |
-| POST | `/workers/claim` | `supported_types: string[]` | Oldest matching pending job by ID |
-| POST | `/workers/{job_id}/succeed` | `result: object` | `{}` |
-| POST | `/workers/{job_id}/fail` | `error: object` | `{}` |
+| POST | `/workers/claim` | None | Attempt for the oldest accessible pending job matching the authenticated worker's stored types |
+| POST | `/workers/{attempt_id}/succeed` | `result: object` | `{"Status":"200 OK"}` |
+| POST | `/workers/{attempt_id}/fail` | `error: object` | `{"Status":"200 OK"}` |
 | GET | `/health/live` | None | `{"status":"ok"}` |
 | GET | `/health` | None | Liveness alias: `{"status":"ok"}` |
 | GET | `/health/ready` | None | `{"status":"ready"}` when the database/schema is usable |
 
-Existing IDs are integers. The ID in `/workers/{job_id}/...` identifies a **job**, despite the route prefix.
+Existing IDs are integers. The ID in `/workers/{attempt_id}/...` identifies an **attempt**, as returned by claiming.
 
 A job response contains `id`, `job_type`, `params`, `status`, `result`, and `error`; the latter two can be null. Status values are `PENDING`, `RUNNING`, `SUCCEEDED`, and `FAILED`.
 
@@ -39,13 +39,20 @@ Submit using `POST /jobs/`:
 }
 ```
 
-Claim using `POST /workers/claim`:
+Claim using `POST /workers/claim` with the worker's API key and no request body:
 
-```json
-{"supported_types": ["send_email"]}
+```http
+POST /workers/claim HTTP/1.1
+X-API-Key: <worker-api-key>
 ```
 
-With the returned job ID, report success using `POST /workers/1/succeed`:
+Job types come from the worker's registered `supported_types` in the database.
+The former `ClaimJob` body is no longer part of the contract; any supplied body
+is ignored, including its `supported_types`. Workers with no stored types cannot
+claim jobs. The response identifies the claimed attempt in `id` and its job in
+`job_id`.
+
+With the returned attempt ID, report success using `POST /workers/1/succeed`:
 
 ```json
 {"result": {"message_id": "example-message-id"}}
