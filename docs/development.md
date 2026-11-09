@@ -3,32 +3,36 @@
 ## Repository layout
 
 ```text
-src/
-  main.py                  FastAPI application; no schema creation at import
-  config.py                Validated environment settings
-  database.py              PostgreSQL engine and session dependency
-  health.py                Read-only database/schema readiness checks
-  models/                  Jobs, users, workers, permissions, attempts, and timestamps
-  dto/                     Pydantic requests and responses
-  services/                Authentication and job-access rules
-  api/routers/             Auth, user, job, worker, claim/outcome, and health routes
-Dockerfile                 Python 3.13 API/migration image with locked runtime dependencies
+backend/
+  src/
+    main.py                FastAPI application; no schema creation at import
+    config.py              Validated environment settings
+    database.py            PostgreSQL engine and session dependency
+    health.py              Read-only database/schema readiness checks
+    models/                Jobs, users, workers, permissions, attempts, and timestamps
+    dto/                   Pydantic requests and responses
+    services/              Authentication and job-access rules
+    api/routers/           Auth, user, job, worker, claim/outcome, and health routes
+  Dockerfile               Python 3.13 API/migration image with locked runtime dependencies
+  .dockerignore            Allowlist of files needed to build the image
+  .env.example             Local application configuration template
+  .env.test.example        Local test database configuration template
+  pyproject.toml           Dependencies, dev tools, pytest and Ruff configuration
+  uv.lock                  Exact dependency versions
+  alembic.ini              Alembic configuration
+  migrations/              Alembic environment and versioned schema changes
+  tests/                   PostgreSQL tests and the separate Compose smoke script
 docker-compose.yml         PostgreSQL, migration, and API services
-.dockerignore              Allowlist of files needed to build the image
 .env.compose.example       Local container configuration template
-pyproject.toml             Dependencies, dev tools, pytest and Ruff configuration
-uv.lock                    Exact dependency versions
-migrations/                Alembic environment and versioned schema changes
-tests/                     PostgreSQL-backed HTTP and migration tests
 .github/workflows/ci.yml    Checks on pushes and pull requests
 docs/                      Current status and proposed implementation design
 ```
 
 ## Running the existing prototype
 
-Use Python 3.13 and `uv sync --locked` to install the declared dependencies. Copy `.env.example` to `.env` and set your local PostgreSQL credentials. Generate a signing key with `uv run --locked python -c "import secrets; print(secrets.token_hex(32))"` and replace the `SECRET_KEY` placeholder with the resulting 64 lowercase hexadecimal characters. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES`. The settings also require positive `LEASE_SECONDS` and `PROTRACTION_SECONDS` values; lease and heartbeat behavior itself is not implemented. Create the database before running `uv run --locked alembic upgrade head`.
+Run `cd backend` from the repository root before the local Python commands in this guide. Use Python 3.13 and `uv sync --locked` to install the declared dependencies. Copy `.env.example` to `.env` inside `backend/` and set your local PostgreSQL credentials. Generate a signing key with `uv run --locked python -c "import secrets; print(secrets.token_hex(32))"` and replace the `SECRET_KEY` placeholder with the resulting 64 lowercase hexadecimal characters. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES`. The settings also require positive `LEASE_SECONDS` and `PROTRACTION_SECONDS` values; lease and heartbeat behavior itself is not implemented. Create the database before running `uv run --locked alembic upgrade head`.
 
-In an environment containing those dependencies, run from the repository root:
+In an environment containing those dependencies, run from `backend/`:
 
 ```sh
 python -m uvicorn main:app --app-dir src --reload
@@ -40,13 +44,13 @@ If using an existing Windows virtual environment, the equivalent interpreter inv
 .\.venv\Scripts\python.exe -m uvicorn main:app --app-dir src --reload
 ```
 
-`--app-dir src` is necessary for the current top-level imports. The reload flag is for local development. Run from the repository root so settings find `.env`. PostgreSQL stores database state; importing `main` does not create or alter tables.
+`--app-dir src` is necessary for the current top-level imports. The reload flag is for local development. Run from `backend/` so settings find `backend/.env`. Configure your IDE to use `backend/.venv` as its interpreter environment and `backend/` as the API working directory. PostgreSQL stores database state; importing `main` does not create or alter tables.
 
 The API normally exposes interactive docs at `http://127.0.0.1:8000/docs` and its schema at `/openapi.json`. Register/log in a user for job and worker-management routes. Workers claim and report with their own API keys and report by attempt ID. See [API](api.md) for examples and [status](status.md) for verification limits.
 
 ## Existing databases
 
-Migrations run explicitly, never through `create_all()` at app import. Upgrade with `uv run --locked alembic upgrade head`, or use the Compose migration command below.
+Migrations run explicitly, never through `create_all()` at app import. Upgrade with `uv run --locked alembic upgrade head` from `backend/`, or use the Compose migration command below.
 
 Migration `476550d0c277` adds users, workers, permissions, and attempts. It refuses to upgrade legacy `RUNNING` jobs because worker ownership cannot be reconstructed; resolve those jobs deliberately before upgrading. Other legacy jobs retain their values and become private jobs owned by an inactive `__legacy_jobs__` account. Reassign them explicitly before use; no ownership-transfer endpoint is implemented. These migration behaviors are covered by PostgreSQL integration tests.
 
@@ -55,6 +59,8 @@ Migration `476550d0c277` adds users, workers, permissions, and attempts. It refu
 See the [testing guide](testing.md) for database setup, commands, coverage, and CI checks.
 
 ## Docker and Compose
+
+Run Docker Compose commands from the repository root (`cd ..` if you are in `backend/`). Compose uses `./backend` as the build context, so paths in `backend/Dockerfile` and `backend/.dockerignore` are relative to that directory. Keep `.env.compose` at the repository root.
 
 The image uses Python 3.13, matching the CI version and the project's declared Python requirement. A build stage uses uv 0.13.7 to install dependencies with `uv sync --locked --no-dev --no-install-project --no-cache`. The final stage contains the virtual environment, application, and migrations; it runs as a non-root user. It does not include uv, tests, or development dependencies. `.dockerignore` includes only the application, migration, and dependency files needed for the build, excluding local environments, credentials, Git, caches, and documentation.
 

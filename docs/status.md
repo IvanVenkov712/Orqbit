@@ -6,17 +6,17 @@ Reviewed on **2026-11-09** against the current working tree. This page includes 
 
 | Area | Current behavior | Evidence |
 | --- | --- | --- |
-| User identity | Registration, Argon2 password hashing, JWT login, and active-user checks | `src/api/routers/auth_router.py`, `src/services/user_auth.py` |
-| Worker identity | User-owned workers; generated API keys stored as SHA-256 hashes; active-worker checks | `src/api/routers/worker_router.py`, `src/services/worker_auth.py` |
-| Job submission | Authenticated creator, nonblank type, JSON-object parameters, explicit permission policy, pending status | `src/api/routers/job_router.py`, `src/dto/job.py` |
+| User identity | Registration, Argon2 password hashing, JWT login, and active-user checks | `backend/src/api/routers/auth_router.py`, `backend/src/services/user_auth.py` |
+| Worker identity | User-owned workers; generated API keys stored as SHA-256 hashes; active-worker checks | `backend/src/api/routers/worker_router.py`, `backend/src/services/worker_auth.py` |
+| Job submission | Authenticated creator, nonblank type, JSON-object parameters, explicit permission policy, pending status | `backend/src/api/routers/job_router.py`, `backend/src/dto/job.py` |
 | Reads and lists | Permission-aware job/worker lookup; filtered lists ordered by descending ID with limit/offset pagination | Job and worker routers |
-| Claims | Oldest accessible compatible pending job by ID; PostgreSQL `FOR UPDATE SKIP LOCKED`; job update and attempt insert commit together | `src/api/routers/claim_router.py` |
+| Claims | Oldest accessible compatible pending job by ID; PostgreSQL `FOR UPDATE SKIP LOCKED`; job update and attempt insert commit together | `backend/src/api/routers/claim_router.py` |
 | Outcomes | Owning worker reports by attempt ID; attempt row is locked and must be running; job and attempt update together | Claim router |
-| Attempts | Worker attribution, parameters, status, result/error, and UTC creation/update timestamps; job responses expose attempt IDs | `src/models/job_attempts.py`, `src/dto/job.py` |
-| Persistence | PostgreSQL with JSONB, synchronous SQLAlchemy sessions, Alembic migrations, and constraints allowing at most one running attempt per job | Models, `src/database.py`, `migrations/` |
-| Input errors | Pydantic validation and generic 422 responses for PostgreSQL data errors, including oversized IDs and null characters | DTOs, `src/main.py` |
-| Health | Liveness plus readiness checks for database access, migration heads, and all mapped tables/columns | `src/health.py` |
-| Containers and CI | Non-root API image; PostgreSQL/migration/API Compose services; PostgreSQL tests and a separate Compose smoke job | `Dockerfile`, `docker-compose.yml`, `.github/workflows/ci.yml` |
+| Attempts | Worker attribution, parameters, status, result/error, and UTC creation/update timestamps; job responses expose attempt IDs | `backend/src/models/job_attempts.py`, `backend/src/dto/job.py` |
+| Persistence | PostgreSQL with JSONB, synchronous SQLAlchemy sessions, Alembic migrations, and constraints allowing at most one running attempt per job | Models, `backend/src/database.py`, `backend/migrations/` |
+| Input errors | Pydantic validation and generic 422 responses for PostgreSQL data errors, including oversized IDs and null characters | DTOs, `backend/src/main.py` |
+| Health | Liveness plus readiness checks for database access, migration heads, and all mapped tables/columns | `backend/src/health.py` |
+| Containers and CI | Non-root API image; PostgreSQL/migration/API Compose services; PostgreSQL tests and a separate Compose smoke job | `backend/Dockerfile`, `docker-compose.yml`, `.github/workflows/ci.yml` |
 
 The current lifecycle is `PENDING -> RUNNING -> SUCCEEDED/FAILED`. Workers execute outside the API. A supported type is a worker-declared capability, and job permission policies determine which jobs it can claim. See [API details](api.md).
 

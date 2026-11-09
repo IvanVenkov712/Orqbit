@@ -33,12 +33,13 @@ Compose runs PostgreSQL, an explicit Alembic migration service, and the API. `GE
 Use Python 3.13 and uv. Create a PostgreSQL database named `orqbit`, then run from the repository root:
 
 ```powershell
+cd backend
 uv sync --locked
 Copy-Item .env.example .env
 uv run --locked python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Edit `.env`: set `DATABASE_URL` to your local credentials and replace `SECRET_KEY=replace_with_secret_key` with the generated 64-character hexadecimal value. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES`. `LEASE_SECONDS` and `PROTRACTION_SECONDS` must also be positive, although lease/heartbeat behavior is not implemented. The real environment files are ignored by Git.
+Edit `backend/.env`: set `DATABASE_URL` to your local credentials and replace `SECRET_KEY=replace_with_secret_key` with the generated 64-character hexadecimal value. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES`. `LEASE_SECONDS` and `PROTRACTION_SECONDS` must also be positive, although lease/heartbeat behavior is not implemented. The real environment files are ignored by Git. Continue running the following Python commands from `backend/`; run Docker Compose commands from the repository root.
 
 ```powershell
 uv run --locked alembic upgrade head

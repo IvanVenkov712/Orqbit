@@ -9,6 +9,9 @@ permissions:
 
 jobs:
   test:
+    defaults:
+      run:
+        working-directory: backend
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -50,4 +53,4 @@ jobs:
         with:
           python-version: '3.13'
       - name: Build, migrate, and check persistence with Compose
-        run: python tests/compose_smoke.py
+        run: python backend/tests/compose_smoke.py

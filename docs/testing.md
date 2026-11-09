@@ -11,6 +11,7 @@ CREATE DATABASE orqbit_test;
 From the repository root in PowerShell, create your local test configuration:
 
 ```powershell
+cd backend
 Copy-Item .env.test.example .env.test
 ```
 
@@ -21,13 +22,13 @@ uv sync --locked
 uv run --locked pytest -q
 ```
 
-The test setup reads `.env.test` from the repository root, regardless of the working directory. This file is ignored by Git; the example contains placeholder credentials. An existing `TEST_DATABASE_URL` environment variable takes precedence, so CI and terminal overrides continue to work. Alternatively, set `$env:TEST_DATABASE_URL` in PowerShell or `export TEST_DATABASE_URL='postgresql+psycopg://postgres:password@localhost:5432/orqbit_test'` in a POSIX shell. Tests do not read the application's `.env` for their database URL.
+Run the Python test and lint commands in this guide from `backend/`. The test setup reads `backend/.env.test`, regardless of the working directory. This file is ignored by Git; the example contains placeholder credentials. An existing `TEST_DATABASE_URL` environment variable takes precedence, so CI and terminal overrides continue to work. Alternatively, set `$env:TEST_DATABASE_URL` in PowerShell or `export TEST_DATABASE_URL='postgresql+psycopg://postgres:password@localhost:5432/orqbit_test'` in a POSIX shell. Tests do not read the application's `.env` for their database URL.
 
 Tests require an explicit `TEST_DATABASE_URL` using the psycopg driver and a database name ending in `_test`; they do not fall back to your application database. The database user must be able to create schemas. Every run creates a uniquely named temporary schema, configures both the API and Alembic to use it, applies migrations from scratch, and drops only that schema on completion. Test connections use UTC. Data in other schemas is untouched. Each test clears application tables in foreign-key order within the temporary schema; migration records are retained. Requests use real commits and separate sessions. Fixtures supply test-only JWT settings, authenticated user headers, and workers with hashed API keys, without requiring a local `.env` file. No SQLite substitute or `create_all()` is used. A missing or unavailable test database fails the suite instead of silently skipping it.
 
 ### What is tested and why
 
-The pytest suite covers the current authenticated API and attempt-based outcomes. Its sources are [job tests](../tests/test_jobs.py), [concurrent claim tests](../tests/test_concurrent_claims.py), [health tests](../tests/test_health.py), and [migration tests](../tests/test_migrations.py). The [Compose smoke check](../tests/compose_smoke.py) runs separately.
+The pytest suite covers the current authenticated API and attempt-based outcomes. Its sources are [job tests](../backend/tests/test_jobs.py), [concurrent claim tests](../backend/tests/test_concurrent_claims.py), [health tests](../backend/tests/test_health.py), and [migration tests](../backend/tests/test_migrations.py). The [Compose smoke check](../backend/tests/compose_smoke.py) runs separately.
 
 | Area | What is checked | Why |
 | --- | --- | --- |
@@ -46,7 +47,7 @@ The pytest suite covers the current authenticated API and attempt-based outcomes
 
 Real PostgreSQL checks JSONB, enums, transactions, and schema behavior that SQLite cannot faithfully verify. Temporary schemas and per-test cleanup prevent one case's data from affecting another; real commits and separate sessions ensure assertions do not rely only on objects cached in memory.
 
-Run the other CI checks locally with:
+Run the other CI checks locally from `backend/` with:
 
 ```powershell
 uv run --locked ruff check .
@@ -57,12 +58,12 @@ GitHub Actions runs on pushes and pull requests with Python 3.13 and a healthy P
 
 ## Docker Compose smoke check
 
-An automated smoke check runs the complete flow in its own randomly named project with generated test credentials, a generated JWT signing key, and a temporary database volume. It builds the image, waits for readiness, checks that the runtime excludes secrets and development tools, registers and logs in a user, creates/reads a private job using its bearer token, reruns migrations, stops PostgreSQL to verify live=200/ready=503, starts PostgreSQL again to verify recovery, recreates the containers while retaining the volume, and reads the same job. It removes only its own containers and volume afterward:
+An automated smoke check runs the complete flow in its own randomly named project with generated test credentials, a generated JWT signing key, and a temporary database volume. It builds the image, waits for readiness, checks that the runtime excludes secrets and development tools, registers and logs in a user, creates/reads a private job using its bearer token, reruns migrations, stops PostgreSQL to verify live=200/ready=503, starts PostgreSQL again to verify recovery, recreates the containers while retaining the volume, and reads the same job. It removes only its own containers and volume afterward. Run it from the repository root (`cd ..` if you are in `backend/`):
 
 ```powershell
-python tests/compose_smoke.py
+python backend/tests/compose_smoke.py
 # Choose another local port if 18000 is occupied:
-python tests/compose_smoke.py --port 18001
+python backend/tests/compose_smoke.py --port 18001
 ```
 
 The smoke script uses only Python's standard library and Docker Compose; a host virtual environment or `.env` file is not required. It runs as a separate GitHub Actions job.
