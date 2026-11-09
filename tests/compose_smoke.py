@@ -131,7 +131,7 @@ def main() -> None:
                 "params": {"nested": [True, None, "UTC"]},
                 "permission_policy": "PRIVATE",
             },
-            headers=auth_headers,
+            headers={**auth_headers, "Idempotency-Key": uuid4().hex},
         )
         assert created["status"] == "PENDING"
         assert created["user_id"] == owner["id"]

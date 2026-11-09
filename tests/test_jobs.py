@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -206,7 +207,7 @@ def test_create_and_read_job_preserves_json(client, database, user, user_headers
     }
     response = client.post(
         "/jobs/",
-        headers=user_headers,
+        headers={**user_headers, "Idempotency-Key": uuid4().hex},
         json={"job_type": "example", "params": params, "permission_policy": "PRIVATE"},
     )
 
@@ -258,7 +259,9 @@ def test_invalid_submission_does_not_insert_job(
     client, database, user_headers, payload
 ):
     response = client.post(
-        "/jobs/", headers=user_headers, json={"permission_policy": "PRIVATE", **payload}
+        "/jobs/",
+        headers={**user_headers, "Idempotency-Key": uuid4().hex},
+        json={"permission_policy": "PRIVATE", **payload},
     )
 
     assert response.status_code == 422
@@ -297,14 +300,28 @@ def test_claim_selects_only_supported_pending_jobs(
         )
         session.add_all(
             [
-                Job(job_type="unsupported", params={}, user_id=worker.user_id),
+                Job(
+                    job_type="unsupported",
+                    params={},
+                    user_id=worker.user_id,
+                    idempotency_key=uuid4().hex,
+                    request_fingerprint="test-fingerprint",
+                ),
                 Job(
                     job_type="example",
                     params={},
                     status=JobStatus.RUNNING,
                     user_id=worker.user_id,
+                    idempotency_key=uuid4().hex,
+                    request_fingerprint="test-fingerprint",
                 ),
-                Job(job_type="example", params={}, user_id=worker.user_id),
+                Job(
+                    job_type="example",
+                    params={},
+                    user_id=worker.user_id,
+                    idempotency_key=uuid4().hex,
+                    request_fingerprint="test-fingerprint",
+                ),
             ]
         )
         session.commit()
@@ -347,7 +364,13 @@ def test_claim_without_stored_types_cannot_use_request_body(
         session.execute(
             delete(SupportedJobType).where(SupportedJobType.worker_id == worker.id)
         )
-        job = Job(job_type="example", params={}, user_id=worker.user_id)
+        job = Job(
+            job_type="example",
+            params={},
+            user_id=worker.user_id,
+            idempotency_key=uuid4().hex,
+            request_fingerprint="test-fingerprint",
+        )
         session.add(job)
         session.commit()
         job_id = job.id
@@ -368,8 +391,22 @@ def test_claim_uses_updated_stored_types(client, database, claim_worker):
         session.get(Worker, worker.id).supported_types = [
             SupportedJobType(type_name="updated")
         ]
-        session.add(Job(job_type="example", params={}, user_id=worker.user_id))
-        eligible = Job(job_type="updated", params={}, user_id=worker.user_id)
+        session.add(
+            Job(
+                job_type="example",
+                params={},
+                user_id=worker.user_id,
+                idempotency_key=uuid4().hex,
+                request_fingerprint="test-fingerprint",
+            )
+        )
+        eligible = Job(
+            job_type="updated",
+            params={},
+            user_id=worker.user_id,
+            idempotency_key=uuid4().hex,
+            request_fingerprint="test-fingerprint",
+        )
         session.add(eligible)
         session.commit()
         eligible_id = eligible.id
@@ -581,7 +618,9 @@ def test_job_endpoints_require_user_token(client, path):
 
 def test_submission_requires_permission_policy(client, database, user_headers):
     response = client.post(
-        "/jobs/", headers=user_headers, json={"job_type": "example", "params": {}}
+        "/jobs/",
+        headers={**user_headers, "Idempotency-Key": uuid4().hex},
+        json={"job_type": "example", "params": {}},
     )
 
     assert response.status_code == 422
@@ -596,7 +635,7 @@ def test_submission_rejects_nonexistent_permissions(
 ):
     response = client.post(
         "/jobs/",
-        headers=user_headers,
+        headers={**user_headers, "Idempotency-Key": uuid4().hex},
         json={
             "job_type": "example",
             "params": {},
@@ -652,6 +691,8 @@ def test_job_permissions_control_reads_lists_and_claims(
             params={},
             user=owner,
             permission_policy=policy,
+            idempotency_key=uuid4().hex,
+            request_fingerprint="test-fingerprint",
             permitted_users=[session.get(User, user.id)] if grant == "user" else [],
             permitted_workers=[session.get(Worker, worker.id)]
             if grant == "worker"
@@ -683,12 +724,35 @@ def test_job_permissions_control_reads_lists_and_claims(
 def test_list_jobs_filters_and_paginates(client, database, user, user_headers):
     with Session(database) as session:
         jobs = [
-            Job(job_type="example", params={}, user_id=user.id),
-            Job(job_type="other", params={}, user_id=user.id),
             Job(
-                job_type="example", params={}, user_id=user.id, status=JobStatus.FAILED
+                job_type="example",
+                params={},
+                user_id=user.id,
+                idempotency_key=uuid4().hex,
+                request_fingerprint="test-fingerprint",
             ),
-            Job(job_type="example", params={}, user_id=user.id),
+            Job(
+                job_type="other",
+                params={},
+                user_id=user.id,
+                idempotency_key=uuid4().hex,
+                request_fingerprint="test-fingerprint",
+            ),
+            Job(
+                job_type="example",
+                params={},
+                user_id=user.id,
+                status=JobStatus.FAILED,
+                idempotency_key=uuid4().hex,
+                request_fingerprint="test-fingerprint",
+            ),
+            Job(
+                job_type="example",
+                params={},
+                user_id=user.id,
+                idempotency_key=uuid4().hex,
+                request_fingerprint="test-fingerprint",
+            ),
         ]
         session.add_all(jobs)
         session.commit()
@@ -733,7 +797,13 @@ def test_outcome_rejection_preserves_running_attempt(
 ):
     worker, headers = claim_worker
     with Session(database) as session:
-        job = Job(job_type="example", params={}, user_id=worker.user_id)
+        job = Job(
+            job_type="example",
+            params={},
+            user_id=worker.user_id,
+            idempotency_key=uuid4().hex,
+            request_fingerprint="test-fingerprint",
+        )
         session.add(job)
         session.commit()
         job_id = job.id
@@ -815,6 +885,8 @@ def test_list_jobs_loads_attempts_in_one_query(
                 params={},
                 user_id=worker.user_id,
                 status=JobStatus.RUNNING,
+                idempotency_key=uuid4().hex,
+                request_fingerprint="test-fingerprint",
                 attempts=[JobAttempt(worker_id=worker.id, attempt_number=1, params={})],
             )
             for _ in range(3)

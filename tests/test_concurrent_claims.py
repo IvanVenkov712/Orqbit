@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +21,13 @@ def test_overlapping_claims_skip_locked_jobs(
     second_worker, second_headers = worker_factory()
     with Session(database) as session:
         jobs = [
-            Job(job_type="example", params={"index": index}, user_id=user.id)
+            Job(
+                job_type="example",
+                params={"index": index},
+                user_id=user.id,
+                idempotency_key=uuid4().hex,
+                request_fingerprint="test-fingerprint",
+            )
             for index in range(job_count)
         ]
         session.add_all(jobs)
@@ -93,7 +100,13 @@ def test_failed_claim_rolls_back_and_releases_job(
     _, first_headers = worker_factory()
     second_worker, second_headers = worker_factory()
     with Session(database) as session:
-        job = Job(job_type="example", params={"preserved": True}, user_id=user.id)
+        job = Job(
+            job_type="example",
+            params={"preserved": True},
+            user_id=user.id,
+            idempotency_key=uuid4().hex,
+            request_fingerprint="test-fingerprint",
+        )
         session.add(job)
         session.commit()
         job_id = job.id
