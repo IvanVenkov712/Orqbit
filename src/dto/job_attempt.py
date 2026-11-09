@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
 
 from models.job_attempts import AttemptStatus
 
@@ -12,6 +12,14 @@ class JobAttemptBase(BaseModel):
     attempt_number: int
     status: AttemptStatus
     params: dict[str, Any]
+    
 
 class JobAttemptRead(JobAttemptBase):
-    pass
+    model_config = ConfigDict(from_attributes=True)
+
+    job_type: str = Field(
+        validation_alias=AliasChoices(
+            "job_type",
+            AliasPath("job", "job_type"),
+        )
+    )
