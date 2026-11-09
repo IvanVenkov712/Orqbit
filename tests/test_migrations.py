@@ -4,7 +4,7 @@ from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from models.job import Job
@@ -55,8 +55,15 @@ def test_migrated_schema_has_postgresql_types(database, alembic_config):
         for name in ("created_at", "updated_at"):
             assert columns[name]["type"].timezone is True
             assert columns[name]["nullable"] is False
-        for name in ("permission_policy", "user_id"):
+        for name in (
+            "permission_policy",
+            "user_id",
+            "idempotency_key",
+            "request_fingerprint",
+        ):
             assert columns[name]["nullable"] is False
+        for name in ("idempotency_key", "request_fingerprint"):
+            assert columns[name]["default"] is None
 
     command.check(alembic_config)
 
@@ -74,11 +81,20 @@ def test_repeated_upgrade_preserves_table_and_job(database, alembic_config):
             job_type="migration-check",
             params={"preserve": [True, None]},
             user=owner,
+            idempotency_key="migration-check",
+            request_fingerprint="test-fingerprint",
         )
         session.add(job)
         session.commit()
         job_id = job.id
-        original_values = (job.params, job.status, job.created_at, job.updated_at)
+        original_values = (
+            job.params,
+            job.status,
+            job.created_at,
+            job.updated_at,
+            job.idempotency_key,
+            job.request_fingerprint,
+        )
 
     with database.connect() as connection:
         table_oid = connection.scalar(text("SELECT 'jobs'::regclass::oid"))
@@ -94,7 +110,49 @@ def test_repeated_upgrade_preserves_table_and_job(database, alembic_config):
             job.status,
             job.created_at,
             job.updated_at,
+            job.idempotency_key,
+            job.request_fingerprint,
         ) == original_values
+
+
+def test_idempotency_constraint_scopes_keys_to_creator(database, user):
+    with Session(database) as session:
+        other = User(
+            username="other-creator",
+            email="other-creator@example.com",
+            full_name="Other creator",
+            hashed_password="unused",
+        )
+        session.add(other)
+        session.flush()
+        session.add_all(
+            [
+                Job(
+                    job_type="example",
+                    params={},
+                    user_id=owner_id,
+                    idempotency_key="shared-key",
+                    request_fingerprint="test-fingerprint",
+                )
+                for owner_id in (user.id, other.id)
+            ]
+        )
+        session.commit()
+
+        session.add(
+            Job(
+                job_type="example",
+                params={},
+                user_id=user.id,
+                idempotency_key="shared-key",
+                request_fingerprint="test-fingerprint",
+            )
+        )
+        with pytest.raises(IntegrityError) as raised:
+            session.commit()
+        session.rollback()
+        assert raised.value.orig.sqlstate == "23505"
+        assert raised.value.orig.diag.constraint_name == "uq_idempotency_key_user_id"
 
 
 def test_downgrade_removes_new_types_and_allows_reupgrade(database, alembic_config):
@@ -160,6 +218,11 @@ def test_upgrade_preserves_legacy_jobs_with_private_inactive_owner(
                 text("SELECT DISTINCT user_id, permission_policy FROM jobs")
             ).all() == [(owner["id"], "PRIVATE")]
             assert connection.scalar(text("SELECT count(*) FROM job_attempts")) == 0
+            assert connection.execute(
+                text(
+                    "SELECT idempotency_key, request_fingerprint FROM jobs ORDER BY id"
+                )
+            ).all() == [(f"legacy-job:{job.id}", "legacy") for job in original_jobs]
     finally:
         command.upgrade(alembic_config, "head")
 
