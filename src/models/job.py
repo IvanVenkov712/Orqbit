@@ -1,7 +1,7 @@
 import enum
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Enum, ForeignKey, String
+from sqlalchemy import Enum, ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,6 +45,10 @@ class Job(Base, TimestampMixin):
         default=PermissionPolicy.PRIVATE
     )
 
+    idempotency_key: Mapped[str] = mapped_column(String(100))
+
+    request_fingerprint: Mapped[str] = mapped_column(String(100))
+
     result: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
     )
@@ -67,4 +71,8 @@ class Job(Base, TimestampMixin):
 
     permitted_workers: Mapped[list["Worker"]] = relationship(
         secondary="job_permitted_workers"
+    )
+    
+    __table_args__ = (
+        UniqueConstraint("user_id", "idempotency_key"),
     )

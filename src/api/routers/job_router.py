@@ -1,5 +1,8 @@
+import hashlib
+from typing import Annotated
+
 import fastapi
-from fastapi import HTTPException, Query
+from fastapi import Header, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -13,33 +16,73 @@ from services.user_auth import CurrentUser
 
 job_router = fastapi.APIRouter()
 
-@job_router.post(path="/jobs/", response_model=JobRead)
-def create_job(payload: JobCreate, session: SessionDep, user: CurrentUser):
+def get_permitted_users(
+    payload: JobCreate,
+    session: SessionDep,
+):
     users = session.scalars(
         select(User).where(User.id.in_(payload.permitted_user_ids))
     ).all()
+    if len(users) != len(set(payload.permitted_user_ids)):
+        raise HTTPException(422, "Some permitted users do not exist")
+    
+    return list(users)
 
+
+def get_permitted_workers(
+    payload: JobCreate,
+    session: SessionDep,
+):
     workers = session.scalars(
         select(Worker).where(Worker.id.in_(payload.permitted_worker_ids))
     ).all()
 
-    if len(users) != len(set(payload.permitted_user_ids)):
-        raise HTTPException(422, "Some permitted users do not exist")
     if len(workers) != len(set(payload.permitted_worker_ids)):
         raise HTTPException(422, "Some permitted workers do not exist")
 
-    job = Job(
-        user=user,
-        job_type=payload.job_type,
-        params=payload.params,
-        permission_policy=payload.permission_policy,
-        permitted_users=list(users),
-        permitted_workers=list(workers)
+    return workers
+
+def get_request_fingerprint(payload: JobCreate) -> str:
+    return hashlib.sha256(
+        payload.model_dump_json().encode()
+    ).hexdigest()
+
+@job_router.post(path="/jobs/", response_model=JobRead)
+def create_job(
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    payload: JobCreate,
+    session: SessionDep,
+    user: CurrentUser,
+):
+    fingerprint = get_request_fingerprint(payload)
+
+    saved = session.scalar(
+        select(Job).where(
+            Job.idempotency_key == idempotency_key,
+            Job.user_id == user.id
+        )
     )
-    session.add(job)
-    session.commit()
-    session.refresh(job)
-    return job
+
+    if saved is not None:
+        if saved.request_fingerprint == fingerprint:
+            return saved
+        else:
+            raise HTTPException(
+                409, "Conflicting create requests"
+            )
+    else:
+        job = Job(
+            user=user,
+            job_type=payload.job_type,
+            params=payload.params,
+            permission_policy=payload.permission_policy,
+            permitted_users=get_permitted_users(payload, session),
+            permitted_workers=get_permitted_workers(payload, session)
+        )
+        session.add(job)
+        session.commit()
+        session.refresh(job)
+        return job
 
 @job_router.get("/jobs", response_model=list[JobRead])
 def list_jobs(
