@@ -19,8 +19,8 @@ from models.worker import Worker
 def test_submission_idempotency_persists_key_and_fingerprint(
     client, database, user, user_headers
 ):
-    from api.routers.job_router import get_request_fingerprint
     from dto.job import JobCreate
+    from services.job import get_request_fingerprint
 
     payload = {"job_type": "example", "params": {}, "permission_policy": "PRIVATE"}
     key = "x" * 100
@@ -172,9 +172,9 @@ def test_submission_idempotency_preserves_unrelated_integrity_errors(
         assert session.scalar(select(func.count()).select_from(Job)) == 0
 
 
-def test_submission_idempotency_normalizes_object_keys_and_permission_lists(client):
-    from api.routers.job_router import get_request_fingerprint
+def test_submission_idempotency_normalizes_object_keys_and_permission_lists():
     from dto.job import JobCreate
+    from services.job import get_request_fingerprint
 
     original = JobCreate(
         job_type="example",
