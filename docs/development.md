@@ -28,14 +28,24 @@ docker-compose.yml         PostgreSQL, migration, and API services
 docs/                      Current status and proposed implementation design
 ```
 
-## Running the existing prototype
+## Running the API locally
 
-Run `cd backend` from the repository root before the local Python commands in this guide. Use Python 3.13 and `uv sync --locked` to install the declared dependencies. Copy `.env.example` to `.env` inside `backend/` and set your local PostgreSQL credentials. Generate a signing key with `uv run --locked python -c "import secrets; print(secrets.token_hex(32))"` and replace the `SECRET_KEY` placeholder with the resulting 64 lowercase hexadecimal characters. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES`. The settings also require positive `LEASE_SECONDS` and `PROTRACTION_SECONDS` values; lease and heartbeat behavior itself is not implemented. Create the database before running `uv run --locked alembic upgrade head`.
+Use Python 3.13 and uv. Create a PostgreSQL database named `orqbit`, then run from the repository root:
 
-In an environment containing those dependencies, run from `backend/`:
+```powershell
+cd backend
+uv sync --locked
+Copy-Item .env.example .env
+uv run --locked python -c "import secrets; print(secrets.token_hex(32))"
+```
 
-```sh
-python -m uvicorn main:app --app-dir src --reload
+Edit `backend/.env`: set `DATABASE_URL` to your local credentials and replace `SECRET_KEY=replace_with_secret_key` with the generated 64-character lowercase hexadecimal value. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES`. The settings also require positive `LEASE_SECONDS` and `PROTRACTION_SECONDS` values; lease and heartbeat behavior itself is not implemented. The real environment files are ignored by Git.
+
+Continue running Python commands from `backend/`; run Docker Compose commands from the repository root. Apply migrations and start the API:
+
+```powershell
+uv run --locked alembic upgrade head
+uv run --locked uvicorn main:app --app-dir src --reload
 ```
 
 If using an existing Windows virtual environment, the equivalent interpreter invocation is:
@@ -47,6 +57,14 @@ If using an existing Windows virtual environment, the equivalent interpreter inv
 `--app-dir src` is necessary for the current top-level imports. The reload flag is for local development. Run from `backend/` so settings find `backend/.env`. Configure your IDE to use `backend/.venv` as its interpreter environment and `backend/` as the API working directory. PostgreSQL stores database state; importing `main` does not create or alter tables.
 
 The API normally exposes interactive docs at `http://127.0.0.1:8000/docs` and its schema at `/openapi.json`. Register/log in a user for job and worker-management routes. Workers claim and report with their own API keys and report by attempt ID. See [API](api.md) for examples and [status](status.md) for verification limits.
+
+## Job coordination
+
+Workers authenticate with `X-API-Key` and claim without a request body; their supported job types are registered on the server. A claim returns an execution attempt, and the worker reports its outcome by that attempt's ID. Clients can read job status, result/error, and attempt IDs through the API. The [example worker guide](example-worker.md) walks through this flow.
+
+Claims use a PostgreSQL transaction with `FOR UPDATE SKIP LOCKED`; claiming creates an attempt and marks the job running in that transaction. Outcome reports lock the attempt, check worker ownership, and update job and attempt together for a running attempt. An exact replay of an accepted outcome is also supported; see the [API reference](api.md) for replay and conflict rules. These operations coordinate work; the API does not execute worker handlers.
+
+Heartbeats, lease recovery, and retries remain planned. A crashed worker can leave a job running indefinitely. There is no exactly-once execution guarantee. Future retries will require idempotent worker side effects; submission deduplication alone cannot prevent a worker from repeating an external action.
 
 ## Existing databases
 
