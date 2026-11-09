@@ -26,6 +26,10 @@ Passwords are hashed with Argon2. Tokens use the configured signing key, algorit
 
 All job routes require a user token. Job types are 1?100 characters and must contain a non-whitespace character. Types are matched as stored; they are not trimmed or normalized. `params` must be a JSON object and may contain nested JSON values. The creator comes from authentication, not a request-supplied user ID.
 
+Submission also requires an `Idempotency-Key` header containing 1–100 characters and at least one non-whitespace character. Generate a key for each intended submission and reuse it with the same request when retrying. Keys are scoped to the authenticated creator: a matching replay returns the existing job in its current state; changed content returns 409, `Conflicting create requests`. JSON object key order and permission-list order/duplicates do not affect matching; other array ordering remains significant. Keys remain reserved while the job exists.
+
+This behavior requires the `jobs.idempotency_key` and `jobs.request_fingerprint` columns and uniqueness on `(user_id, idempotency_key)`. The current migrations do not yet create them.
+
 `GET /jobs` defaults to `limit=50`, `offset=0`; limit must be 1?100 and offset nonnegative. Filters are combined with permission checks. Attempts are batch-loaded for response serialization.
 
 A job response contains:
@@ -61,6 +65,7 @@ Use a bearer token obtained from login:
 ```http
 POST /jobs/ HTTP/1.1
 Authorization: Bearer <access_token>
+Idempotency-Key: 52745981-d281-4df5-872a-b15417f5ec23
 Content-Type: application/json
 
 {
@@ -140,7 +145,7 @@ Errors use a top-level `detail` field. Request validation returns an array conta
 | Invalid fields or malformed body | 422, validation detail array |
 | PostgreSQL data error, including oversized integer IDs or null characters in JSON strings | 422, `Input contains a value PostgreSQL cannot store` |
 
-Repeating an accepted outcome returns 400 because the attempt is no longer running. There is no idempotency-key support. PostgreSQL data errors are mapped to a generic response without SQL/exception details; other storage/application failures may still return 500.
+Repeating an accepted outcome returns 400 because the attempt is no longer running. Idempotency keys apply to job submission only. PostgreSQL data errors are mapped to a generic response without SQL/exception details; other storage/application failures may still return 500.
 
 ## Health behavior
 

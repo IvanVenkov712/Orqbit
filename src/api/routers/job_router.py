@@ -1,9 +1,11 @@
 import hashlib
+import json
 from typing import Annotated
 
 import fastapi
 from fastapi import Header, HTTPException, Query
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from database import SessionDep
@@ -43,46 +45,59 @@ def get_permitted_workers(
     return workers
 
 def get_request_fingerprint(payload: JobCreate) -> str:
-    return hashlib.sha256(
-        payload.model_dump_json().encode()
-    ).hexdigest()
+    request = payload.model_dump(mode="json")
+    request["permitted_user_ids"] = sorted(set(payload.permitted_user_ids))
+    request["permitted_worker_ids"] = sorted(set(payload.permitted_worker_ids))
+    canonical = json.dumps(request, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 @job_router.post(path="/jobs/", response_model=JobRead)
 def create_job(
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=1, max_length=100, pattern=r"\S"),
+    ],
     payload: JobCreate,
     session: SessionDep,
     user: CurrentUser,
 ):
     fingerprint = get_request_fingerprint(payload)
 
-    saved = session.scalar(
-        select(Job).where(
-            Job.idempotency_key == idempotency_key,
-            Job.user_id == user.id
-        )
+    stmt = select(Job).where(
+        Job.idempotency_key == idempotency_key,
+        Job.user_id == user.id,
     )
+    saved = session.scalar(stmt)
 
-    if saved is not None:
-        if saved.request_fingerprint == fingerprint:
-            return saved
-        else:
-            raise HTTPException(
-                409, "Conflicting create requests"
-            )
-    else:
+    if saved is None:
         job = Job(
             user=user,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
             job_type=payload.job_type,
             params=payload.params,
             permission_policy=payload.permission_policy,
             permitted_users=get_permitted_users(payload, session),
-            permitted_workers=get_permitted_workers(payload, session)
+            permitted_workers=get_permitted_workers(payload, session),
         )
         session.add(job)
-        session.commit()
-        session.refresh(job)
-        return job
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            if getattr(exc.orig, "sqlstate", None) != "23505":
+                raise
+            # A competing submission may have committed the same creator/key.
+            saved = session.scalar(stmt)
+            if saved is None:
+                raise
+        else:
+            session.refresh(job)
+            return job
+
+    if saved.request_fingerprint != fingerprint:
+        raise HTTPException(409, "Conflicting create requests")
+    return saved
 
 @job_router.get("/jobs", response_model=list[JobRead])
 def list_jobs(
