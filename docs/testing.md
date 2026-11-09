@@ -8,15 +8,20 @@ Create a separate PostgreSQL database once, using psql or your database administ
 CREATE DATABASE orqbit_test;
 ```
 
-From the repository root in PowerShell, supply its connection URL with your local credentials:
+From the repository root in PowerShell, create your local test configuration:
 
 ```powershell
-$env:TEST_DATABASE_URL = "postgresql+psycopg://postgres:password@localhost:5432/orqbit_test"
+Copy-Item .env.test.example .env.test
+```
+
+Edit `TEST_DATABASE_URL` in `.env.test` with your local PostgreSQL credentials, then run:
+
+```powershell
 uv sync --locked
 uv run --locked pytest -q
 ```
 
-For a POSIX shell, use `export TEST_DATABASE_URL='postgresql+psycopg://postgres:password@localhost:5432/orqbit_test'` before the same uv commands. The credentials above are local examples, not production defaults.
+The test setup reads `.env.test` from the repository root, regardless of the working directory. This file is ignored by Git; the example contains placeholder credentials. An existing `TEST_DATABASE_URL` environment variable takes precedence, so CI and terminal overrides continue to work. Alternatively, set `$env:TEST_DATABASE_URL` in PowerShell or `export TEST_DATABASE_URL='postgresql+psycopg://postgres:password@localhost:5432/orqbit_test'` in a POSIX shell. Tests do not read the application's `.env` for their database URL.
 
 Tests require an explicit `TEST_DATABASE_URL` using the psycopg driver and a database name ending in `_test`; they do not fall back to your application database. The database user must be able to create schemas. Every run creates a uniquely named temporary schema, configures both the API and Alembic to use it, applies migrations from scratch, and drops only that schema on completion. Test connections use UTC. Data in other schemas is untouched. Each test clears application tables in foreign-key order within the temporary schema; migration records are retained. Requests use real commits and separate sessions. Fixtures supply test-only JWT settings, authenticated user headers, and workers with hashed API keys, without requiring a local `.env` file. No SQLite substitute or `create_all()` is used. A missing or unavailable test database fails the suite instead of silently skipping it.
 

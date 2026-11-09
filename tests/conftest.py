@@ -1,6 +1,5 @@
 """Real PostgreSQL, with a fresh migrated schema for each pytest run."""
 
-import os
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -9,6 +8,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -23,6 +23,17 @@ from models.worker import Worker
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class TestDatabaseSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=ROOT / ".env.test",
+        env_prefix="TEST_",
+        extra="ignore",
+        hide_input_in_errors=True,
+    )
+
+    database_url: str | None = None
+
+
 @pytest.fixture(scope="session")
 def alembic_config():
     return Config(str(ROOT / "alembic.ini"))
@@ -30,10 +41,11 @@ def alembic_config():
 
 @pytest.fixture(scope="session")
 def database_engine(alembic_config):
-    value = os.environ.get("TEST_DATABASE_URL")
+    value = TestDatabaseSettings().database_url
     if not value:
         raise pytest.UsageError(
-            "Set TEST_DATABASE_URL to a PostgreSQL database ending in '_test'."
+            "Set TEST_DATABASE_URL in the environment or .env.test "
+            "to a PostgreSQL database ending in '_test'."
         )
     try:
         url = make_url(value)
