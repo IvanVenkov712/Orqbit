@@ -121,7 +121,7 @@ The worker executes outside Orqbit, then sends one outcome:
 | POST | `/workers/{attempt_id}/succeed` | `{"result":{"message_id":"example-message-id"}}` | `{"Status":"200 OK"}` |
 | POST | `/workers/{attempt_id}/fail` | `{"error":{"code":"DELIVERY_FAILED","message":"Provider failure"}}` | `{"Status":"200 OK"}` |
 
-Both routes require the owning worker's API key. Use the returned attempt ID, not the job ID. Result/error must be JSON objects. The attempt is locked, checked for ownership and `RUNNING` status, and updated together with its job. Success/failure are alternative terminal outcomes; failure does not schedule a retry. There is no API operation that renews a lease, expires an abandoned attempt, or requeues it.
+Both routes require the owning worker's API key. Use the returned attempt ID, not the job ID. Result/error must be JSON objects. The attempt is locked and checked for ownership. A first outcome requires `RUNNING` status and updates the attempt together with its job. Repeating the accepted outcome with the same payload returns 200, `{"Status":"200 OK"}`, without changing stored values or timestamps. JSON object key order does not affect matching, and equivalent numeric representations such as `1` and `1.0` match; array order and boolean versus numeric values do affect matching. Changed payloads, contradictory outcomes, and reports against lost attempts return 409. No extra idempotency header is required. Success/failure are alternative terminal outcomes; failure does not schedule a retry. There is no API operation that renews a lease, expires an abandoned attempt, or requeues it.
 
 ## Errors
 
@@ -137,15 +137,14 @@ Errors use a top-level `detail` field. Request validation returns an array conta
 | Missing/inaccessible worker | 404, `Worker not found` |
 | Empty claim result | 404, `No jobs were found` |
 | Missing attempt or another worker's attempt | 404, `Attempt not found` |
-| Succeed on a non-running attempt | 400, `Job not running` |
-| Fail on a non-running attempt | 400, `Attempt not running` |
+| Changed or contradictory outcome, or report against a lost attempt | 409, `Conflicting outcome report` |
 | Duplicate username/email | 400, `User with username ... already exists` or `User with email ... already exists` |
 | Duplicate worker name | 409, `Worker name already exists` |
 | Nonexistent permission IDs | 422, `Some permitted users do not exist` or `Some permitted workers do not exist` |
 | Invalid fields or malformed body | 422, validation detail array |
 | PostgreSQL data error, including oversized integer IDs or null characters in JSON strings | 422, `Input contains a value PostgreSQL cannot store` |
 
-Repeating an accepted outcome returns 400 because the attempt is no longer running. Idempotency keys apply to job submission only. PostgreSQL data errors are mapped to a generic response without SQL/exception details; other storage/application failures may still return 500.
+Exact replays of accepted outcomes return 200; conflicting reports return 409. Idempotency keys apply to job submission only. PostgreSQL data errors are mapped to a generic response without SQL/exception details; other storage/application failures may still return 500.
 
 ## Health behavior
 

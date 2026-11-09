@@ -403,7 +403,7 @@ def test_claim_and_report_outcome(
     worker, headers = claim_worker
     response = client.post(
         "/jobs/",
-        headers=user_headers,
+        headers={**user_headers, "Idempotency-Key": "outcome-test"},
         json={"job_type": "example", "params": {}, "permission_policy": "PRIVATE"},
     )
     assert response.status_code == 200
@@ -434,7 +434,7 @@ def test_claim_and_report_outcome(
         session.get(JobAttempt, attempt_id).updated_at = old_time
         session.commit()
 
-    outcome = {"message": "Здравей", "values": [True, None, 3.5]}
+    outcome = {"message": "Здравей", "values": [True, None, 3.5, 1e20]}
     response = client.post(
         f"/workers/{attempt_id}/{endpoint}", headers=headers, json={field: outcome}
     )
@@ -460,20 +460,56 @@ def test_claim_and_report_outcome(
         assert getattr(attempt, field) == outcome
         assert getattr(attempt, other_field) is None
         assert attempt.updated_at > old_time
+        job_updated_at = job.updated_at
+        attempt_updated_at = attempt.updated_at
+
+    response = client.post(
+        f"/workers/{attempt_id}/{endpoint}", headers=headers, json={field: outcome}
+    )
+    assert response.status_code == 200
+    assert response.json() == {"Status": "200 OK"}
+    with Session(database) as session:
+        job = session.get(Job, job_id)
+        attempt = session.get(JobAttempt, attempt_id)
+        assert job.updated_at == job_updated_at
+        assert attempt.updated_at == attempt_updated_at
+        for record in (job, attempt):
+            assert getattr(record, field) == outcome
+            assert getattr(record, other_field) is None
+            assert record.status.value == status
 
 
 @pytest.mark.parametrize(
-    ("endpoint", "payload"),
-    [("succeed", {"result": {}}), ("fail", {"error": {"message": "failed"}})],
+    ("endpoint", "field"),
+    [("succeed", "result"), ("fail", "error")],
 )
 @pytest.mark.parametrize(
     "status", [AttemptStatus.SUCCEEDED, AttemptStatus.FAILED, AttemptStatus.LOST]
 )
-def test_non_running_attempt_rejects_outcome(
-    client, database, claim_worker, endpoint, payload, status
+@pytest.mark.parametrize("same_payload", [False, True])
+@pytest.mark.parametrize("other_worker", [False, True])
+def test_terminal_attempt_outcome_replays_or_conflicts(
+    client,
+    database,
+    claim_worker,
+    worker_factory,
+    endpoint,
+    field,
+    status,
+    same_payload,
+    other_worker,
 ):
     worker, headers = claim_worker
     old_time = datetime(2020, 1, 1, tzinfo=UTC)
+    stored = {"message": "original", "nested": [True, {"a": 1, "b": 2}]}
+    result = stored if status == AttemptStatus.SUCCEEDED else None
+    error = stored if status == AttemptStatus.FAILED else None
+    payload = {
+        field: {
+            "nested": [True if same_payload else 1, {"b": 2, "a": 1.0}],
+            "message": "original",
+        }
+    }
     with Session(database, expire_on_commit=False) as session:
         job_status = (
             JobStatus.FAILED
@@ -485,6 +521,10 @@ def test_non_running_attempt_rejects_outcome(
             params={},
             status=job_status,
             user_id=worker.user_id,
+            idempotency_key="terminal-outcome-test",
+            request_fingerprint="unused",
+            result=result,
+            error=error,
             updated_at=old_time,
         )
         attempt = JobAttempt(
@@ -493,6 +533,8 @@ def test_non_running_attempt_rejects_outcome(
             attempt_number=1,
             params={},
             status=status,
+            result=result,
+            error=error,
             updated_at=old_time,
         )
         session.add(attempt)
@@ -500,23 +542,33 @@ def test_non_running_attempt_rejects_outcome(
         job_id = job.id
         attempt_id = attempt.id
 
+    if other_worker:
+        _, headers = worker_factory()
     response = client.post(
         f"/workers/{attempt_id}/{endpoint}", headers=headers, json=payload
     )
 
-    assert response.status_code == 400
-    detail = "Job not running" if endpoint == "succeed" else "Attempt not running"
-    assert response.json() == {"detail": detail}
+    matches = same_payload and status.value == (
+        "SUCCEEDED" if endpoint == "succeed" else "FAILED"
+    )
+    expected = 404 if other_worker else (200 if matches else 409)
+    assert response.status_code == expected
+    if expected == 200:
+        assert response.json() == {"Status": "200 OK"}
+    elif expected == 409:
+        assert response.json() == {"detail": "Conflicting outcome report"}
+    else:
+        assert response.json() == {"detail": "Attempt not found"}
     with Session(database) as session:
         job = session.get(Job, job_id)
         assert job.status == job_status
-        assert job.result is None
-        assert job.error is None
+        assert job.result == result
+        assert job.error == error
         assert job.updated_at == old_time
         attempt = session.get(JobAttempt, attempt_id)
         assert attempt.status == status
-        assert attempt.result is None
-        assert attempt.error is None
+        assert attempt.result == result
+        assert attempt.error == error
         assert attempt.updated_at == old_time
 
 
