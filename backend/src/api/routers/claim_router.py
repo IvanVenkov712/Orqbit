@@ -2,14 +2,14 @@ from fastapi import APIRouter, HTTPException
 
 from database import SessionDep
 from dto.claims import CompleteJob, FailJob
-from dto.job_attempt import JobAttemptRead
+from dto.job_attempt import JobAttemptClaim
 from services import job_execution
 from services.worker_auth import CurrentWorker
 
 claim_router = APIRouter()
 
 
-@claim_router.post(path="/workers/claim", response_model=JobAttemptRead)
+@claim_router.post(path="/workers/claim", response_model=JobAttemptClaim)
 def claim_job(worker: CurrentWorker, session: SessionDep):
     try:
         attempt = job_execution.claim_job(session, worker)

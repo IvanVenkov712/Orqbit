@@ -2,18 +2,20 @@ from typing import Annotated
 
 import fastapi
 from fastapi import Header, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+import services
 from database import SessionDep
 from dto.job import JobCreate, JobRead
+from dto.job_attempt import JobAttemptRead
+from models import JobAttempt
 from models.job import Job, JobStatus
 from services.job import (
     InvalidJobPermissions,
     JobCreationConflict,
     accessible_user_jobs_query,
-    job_accessible_for_user,
 )
-from services.job import create_job as create_job_service
 from services.user_auth import CurrentUser
 
 job_router = fastapi.APIRouter()
@@ -30,7 +32,7 @@ def create_job(
     user: CurrentUser,
 ):
     try:
-        return create_job_service(session, user, payload, idempotency_key)
+        return services.job.create_job(session, user, payload, idempotency_key)
     except JobCreationConflict as exc:
         raise HTTPException(409, str(exc)) from None
     except InvalidJobPermissions as exc:
@@ -69,12 +71,35 @@ def list_jobs(
 
 @job_router.get(path="/jobs/{job_id}", response_model=JobRead)
 def get_job(job_id: int, session: SessionDep, user: CurrentUser):
-    job = session.get(Job, job_id)
+    job = services.job.get_job(job_id, session, user)
 
-    if job is None or not job_accessible_for_user(job, user):
+    if job is None:
         raise HTTPException(404, "Job not found")
 
     return job
+
+@job_router.get(path="/jobs/{job_id}/attempts", response_model=list[JobAttemptRead])
+def get_job_attempts(
+    job_id: int,
+    session: SessionDep,
+    user: CurrentUser,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    job = services.job.get_job(job_id, session, user)
+
+    if job is None:
+        raise HTTPException(404, "Job not found")
+
+    stmt = (
+        select(JobAttempt)
+        .where(JobAttempt.job_id == job.id)
+        .order_by(JobAttempt.attempt_number.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    return session.scalars(stmt).all()
+
 
 
 

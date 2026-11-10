@@ -23,6 +23,7 @@ Passwords are hashed with Argon2. Tokens use the configured signing key, algorit
 | POST | `/jobs/` | JSON: `job_type`, `params`, `permission_policy`; optional permitted-ID lists | Created job |
 | GET | `/jobs` | Optional `owner_id`, `status`, `job_type`, `limit`, `offset` query parameters | Accessible jobs, newest ID first |
 | GET | `/jobs/{job_id}` | Job ID | Accessible job, or 404 |
+| GET | `/jobs/{job_id}/attempts` | Job ID; optional `limit`, `offset` | Execution attempts, highest attempt number first |
 
 All job routes require a user token. Job types are 1?100 characters and must contain a non-whitespace character. Types are matched as stored; they are not trimmed or normalized. `params` must be a JSON object and may contain nested JSON values. The creator comes from authentication, not a request-supplied user ID.
 
@@ -42,7 +43,24 @@ A job response contains:
 | `result`, `error` | JSON objects or null |
 | `attempt_ids` | IDs of persisted attempts |
 
-Timestamps, permission policies, and permitted-ID lists are not currently included in job responses. Attempt details have no read endpoint yet.
+Timestamps, permission policies, and permitted-ID lists are not currently included in job responses.
+
+### Attempt history
+
+`GET /jobs/{job_id}/attempts` uses the same user-token authentication and job read permissions as `GET /jobs/{job_id}`. Missing and inaccessible jobs both return 404, `Job not found`. A permitted worker grant alone does not give that worker's owner user-facing read access.
+
+The response is a JSON array ordered by descending `attempt_number`. Pagination defaults to `limit=50`, `offset=0`; limit must be 1-100 and offset nonnegative. Invalid pagination returns 422. A job without attempts, or an offset beyond its history, returns 200 with `[]`.
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `job_id`, `worker_id` | Integer attempt, job, and assigned worker IDs |
+| `job_type`, `params` | Job type and the attempt's JSON-object input |
+| `attempt_number` | Positive execution attempt number within the job |
+| `status` | `RUNNING`, `SUCCEEDED`, `FAILED`, or `LOST` |
+| `result`, `error` | Persisted JSON-object outcome fields, or null when absent |
+| `created_at`, `updated_at` | Timezone-aware creation and last-update timestamps in ISO 8601 format |
+
+Running attempts have null result and error; succeeded attempts carry a result, and failed attempts carry an error. `updated_at` records the last update, not a dedicated execution-finished timestamp. The schema includes `LOST`, but the API does not currently detect abandoned attempts or schedule retries. The `/workers/claim` response retains its existing fields; the additional history fields are returned only by this read endpoint.
 
 ### Permission policies
 

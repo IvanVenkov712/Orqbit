@@ -226,6 +226,10 @@ def test_create_and_read_job_preserves_json(client, database, user, user_headers
     assert response.status_code == 200
     assert response.json() == created
 
+    response = client.get(f"/jobs/{created['id']}/attempts", headers=user_headers)
+    assert response.status_code == 200
+    assert response.json() == []
+
     # A separate connection confirms that the HTTP request committed the row.
     with Session(database) as session:
         job = session.get(Job, created["id"])
@@ -269,11 +273,78 @@ def test_invalid_submission_does_not_insert_job(
         assert session.scalar(select(func.count()).select_from(Job)) == 0
 
 
-def test_missing_job_returns_404(client, user_headers):
-    response = client.get("/jobs/0", headers=user_headers)
+@pytest.mark.parametrize("path", ["/jobs/0", "/jobs/0/attempts"])
+def test_missing_job_returns_404(client, user_headers, path):
+    response = client.get(path, headers=user_headers)
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Job not found"}
+
+
+def test_job_attempt_history_orders_and_paginates(
+    client, database, user_headers, claim_worker
+):
+    worker, _ = claim_worker
+    with Session(database) as session:
+        job = Job(
+            job_type="example",
+            params={},
+            user_id=worker.user_id,
+            status=JobStatus.FAILED,
+            idempotency_key=uuid4().hex,
+            request_fingerprint="test-fingerprint",
+            # Insertion order deliberately differs from attempt-number order.
+            attempts=[
+                JobAttempt(
+                    worker_id=worker.id,
+                    attempt_number=number,
+                    status=AttemptStatus.LOST,
+                    params={},
+                )
+                for number in (2, 3, 1)
+            ],
+        )
+        other_job = Job(
+            job_type="other",
+            params={},
+            user_id=worker.user_id,
+            idempotency_key=uuid4().hex,
+            request_fingerprint="test-fingerprint",
+            attempts=[JobAttempt(worker_id=worker.id, attempt_number=1, params={})],
+        )
+        session.add_all([job, other_job])
+        session.commit()
+        job_id = job.id
+
+    response = client.get(f"/jobs/{job_id}/attempts", headers=user_headers)
+    assert response.status_code == 200
+    history = response.json()
+    assert [attempt["attempt_number"] for attempt in history] == [3, 2, 1]
+    assert all(attempt["job_id"] == job_id for attempt in history)
+    assert all(attempt["status"] == "LOST" for attempt in history)
+
+    response = client.get(
+        f"/jobs/{job_id}/attempts",
+        headers=user_headers,
+        params={"limit": 1, "offset": 1},
+    )
+    assert response.status_code == 200
+    assert response.json() == [history[1]]
+
+    response = client.get(
+        f"/jobs/{job_id}/attempts", headers=user_headers, params={"offset": 3}
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.parametrize(
+    "params", [{"limit": 0}, {"limit": 101}, {"offset": -1}, {"offset": "invalid"}]
+)
+def test_job_attempt_history_rejects_invalid_pagination(client, user_headers, params):
+    response = client.get("/jobs/0/attempts", headers=user_headers, params=params)
+
+    assert response.status_code == 422
 
 
 @pytest.mark.parametrize(
@@ -461,6 +532,22 @@ def test_claim_and_report_outcome(
     assert response.json()["attempt_number"] == 1
     assert response.json()["params"] == {}
     assert response.json()["status"] == "RUNNING"
+    assert set(response.json()) == {
+        "id",
+        "job_id",
+        "job_type",
+        "attempt_number",
+        "status",
+        "params",
+    }
+    response = client.get(f"/jobs/{job_id}/attempts", headers=user_headers)
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    running = response.json()[0]
+    assert running["id"] == attempt_id
+    assert running["status"] == "RUNNING"
+    assert running["result"] is None
+    assert running["error"] is None
     with Session(database) as session:
         job = session.get(Job, job_id)
         assert job.created_at == old_time
@@ -499,6 +586,35 @@ def test_claim_and_report_outcome(
         assert attempt.updated_at > old_time
         job_updated_at = job.updated_at
         attempt_updated_at = attempt.updated_at
+
+    response = client.get(f"/jobs/{job_id}/attempts", headers=user_headers)
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    history = response.json()[0]
+    assert set(history) == {
+        "id",
+        "job_id",
+        "job_type",
+        "attempt_number",
+        "status",
+        "params",
+        "worker_id",
+        "result",
+        "error",
+        "created_at",
+        "updated_at",
+    }
+    assert history["id"] == attempt_id
+    assert history["job_id"] == job_id
+    assert history["job_type"] == "example"
+    assert history["attempt_number"] == 1
+    assert history["params"] == {}
+    assert history["worker_id"] == worker.id
+    assert history["status"] == status
+    assert history[field] == outcome
+    assert history[other_field] is None
+    assert datetime.fromisoformat(history["created_at"]) == attempt.created_at
+    assert datetime.fromisoformat(history["updated_at"]) == attempt_updated_at
 
     response = client.post(
         f"/workers/{attempt_id}/{endpoint}", headers=headers, json={field: outcome}
@@ -609,7 +725,7 @@ def test_terminal_attempt_outcome_replays_or_conflicts(
         assert attempt.updated_at == old_time
 
 
-@pytest.mark.parametrize("path", ["/jobs/", "/jobs", "/jobs/0"])
+@pytest.mark.parametrize("path", ["/jobs/", "/jobs", "/jobs/0", "/jobs/0/attempts"])
 def test_job_endpoints_require_user_token(client, path):
     response = client.post(path, json={}) if path == "/jobs/" else client.get(path)
 
@@ -719,6 +835,15 @@ def test_job_permissions_control_reads_lists_and_claims(
         if claimable:
             assert response.json()["job_id"] == job_id
             assert attempts[0].worker_id == worker.id
+
+    response = client.get(f"/jobs/{job_id}/attempts", headers=user_headers)
+    assert response.status_code == (200 if visible else 404)
+    if visible:
+        assert [attempt["id"] for attempt in response.json()] == [
+            attempt.id for attempt in attempts
+        ]
+    else:
+        assert response.json() == {"detail": "Job not found"}
 
 
 def test_list_jobs_filters_and_paginates(client, database, user, user_headers):

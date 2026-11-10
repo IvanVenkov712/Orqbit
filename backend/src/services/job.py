@@ -5,10 +5,12 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from database import SessionDep
 from dto.job import JobCreate
 from models.job import Job, PermissionPolicy
 from models.user import User
 from models.worker import Worker
+from services.user_auth import CurrentUser
 
 
 class JobCreationConflict(Exception):
@@ -163,6 +165,10 @@ def job_accessible_for_worker(job: Job, worker: Worker) -> bool:
         return any(w.id == worker.id for w in job.permitted_workers)
     
     return False
+
+def get_job(job_id: int, session: SessionDep, user: CurrentUser):
+    stmt = accessible_user_jobs_query(user).where(Job.id == job_id)
+    return session.scalar(stmt)
     
    
     
