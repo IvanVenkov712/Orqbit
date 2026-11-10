@@ -2,19 +2,23 @@
 
 Build a small operational dashboard around Orqbit's existing public HTTP API. Prioritize a complete submission-and-result flow, then add browsing and management screens. The [development guide](development.md) records the proposed architecture and visual design; the [API reference](../../docs/api.md) records the implemented backend contract.
 
-## Current starting point
+## Current state
 
-The frontend contains the React/TypeScript Vite starter, Oxlint, a package lockfile, a Docker image, and Nginx configuration. Vite and Nginx already proxy `/api` to the backend. Docker Compose includes a frontend service on port 8080.
+The frontend contains a React/TypeScript application shell with React Router, a light responsive layout, Jobs/Workers navigation, a signed-out user area, and explicitly labeled route placeholders. Vite and Nginx proxy `/api` to the backend. Docker Compose includes a frontend service on port 8080.
 
-All application milestones below are planned. React Router, TanStack Query, and a frontend test runner are not installed. The starter's existing styling is not the proposed dashboard design.
+Step 1 is implemented; steps 2–9 remain planned. Vitest, jsdom, and React Testing Library provide focused component tests through `npm test`. Authentication, API integration, feature screens, and TanStack Query are not implemented yet.
 
 Treat each milestone as a separate change, splitting it further when necessary. Prefer changes to one to three files; explain additional files when directly necessary. Add dependencies only when their behavior is introduced. Each behavior change should include focused verification, rather than postponing testing until the final milestone.
 
-## 1. Application shell and visual foundation
+## 1. Application shell and visual foundation — completed
 
 Replace the starter content with a simple layout. Introduce React Router, navigation for Jobs and Workers, a current-user area, and route placeholders. Establish the light palette, typography, spacing, controls, and focus styles from the development guide.
 
 **Done when:** navigation and browser back/forward work, unknown routes have a useful response, and the layout works at narrow widths. Keep placeholders clearly identified until their screens exist.
+
+**Implemented:** `/` redirects to `/jobs`. The Jobs, submission, job details, Workers, worker details, login, and registration routes render labeled placeholders. Navigation highlights the current section, including detail routes. Unknown routes offer a link back to Jobs. Shared styles establish the guide's light palette, typography, spacing, controls, keyboard focus, and skip link. The current-user area explicitly shows “Not signed in” until authentication is implemented.
+
+**Verification:** `npm test` passed all 11 routing/component tests, including browser history, direct route entry, active navigation, placeholder links, and unknown-route recovery. `npm run lint` and `npm run build` passed. Headless Edge checks confirmed navigation, browser back/forward, direct reload, unknown-route recovery, visible keyboard focus on the skip link, and no horizontal overflow at 320px, 390px, and 1280px. Direct route requests to the Vite server returned the application shell. No backend integration is introduced in this step.
 
 ## 2. Shared HTTP client
 
