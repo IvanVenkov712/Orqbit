@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from database import SessionDep
@@ -16,6 +17,23 @@ from services.worker import (
 from services.worker import create_worker as create_worker_service
 
 worker_router = APIRouter()
+
+
+@worker_router.get("/job-types", response_model=list[str])
+def list_job_types(
+    user: CurrentUser,
+    session: SessionDep,
+    query: str | None = Query(None, min_length=1, max_length=100),
+    limit: int = Query(10, ge=1, le=100),
+):
+    visible_worker_ids = accessible_workers_query(user).with_only_columns(Worker.id)
+    stmt = select(SupportedJobType.type_name).where(
+        SupportedJobType.worker_id.in_(visible_worker_ids)
+    )
+    if query is not None:
+        stmt = stmt.where(SupportedJobType.type_name.icontains(query, autoescape=True))
+    stmt = stmt.distinct().order_by(SupportedJobType.type_name).limit(limit)
+    return session.scalars(stmt).all()
 
 
 @worker_router.post(path="/workers", response_model=WorkerCreateResponse)

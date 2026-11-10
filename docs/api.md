@@ -120,6 +120,14 @@ Worker visibility policies are `PRIVATE` (owner only), `PERMITTED_USERS` (owner 
 
 Worker metadata contains `id`, `name`, `active`, `user_id`, `permission_policy`, `supported_types`, and `permitted_user_ids`. The raw API key is returned only by creation; store it for the independent worker. Reads/lists omit it, and PostgreSQL stores its SHA-256 hash. Worker names are globally unique.
 
+### Job-type suggestions
+
+`GET /job-types?query=add&limit=10` requires a user bearer token and returns a JSON array of distinct supported type names from workers the caller can view, for example `["add_numbers"]`. It reuses worker metadata visibility: owned workers, workers visible to all users, and workers granting the caller visibility. Types declared only by hidden workers are excluded before limiting the results.
+
+The optional `query` is a case-insensitive, literal substring (1–100 characters); `%` and `_` are not wildcards. Omit it to request suggestions without a search term. Names retain their stored spelling and whitespace, are deduplicated by exact name, and are ordered by ascending name. `limit` defaults to 10 and must be 1–100. No matches returns 200 with `[]`; invalid parameters return 422.
+
+The source is worker registrations, including visible inactive registrations, rather than a separate job-type catalog. Suggestions do not establish that a worker is online or eligible to claim a submitted job. They do not restrict the existing submission or worker-registration contracts.
+
 ### Worker workflow
 
 Create a worker with a user token:
