@@ -489,7 +489,7 @@ test.each(['   ', 'a'.repeat(101)])('rejects an invalid job type before making a
 test('submits a private job with bearer authentication and a key, preserving type and nested parameters', async () => {
   await enterApp('/jobs/new')
   expect((screen.getByLabelText('Access policy') as HTMLSelectElement).value).toBe('PRIVATE')
-  expect(screen.getByLabelText('Access policy').querySelectorAll('option')).toHaveLength(1)
+  expect(screen.getByLabelText('Access policy').querySelectorAll('option')).toHaveLength(5)
   fillJob({ nested: { enabled: true, values: [1, null, 'two'] } }, ' custom_type ')
   fetchMock.mockResolvedValueOnce(response({ id: 42 }))
   fireEvent.click(screen.getByRole('button', { name: 'Submit job' }))
@@ -506,6 +506,143 @@ test('submits a private job with bearer authentication and a key, preserving typ
   })
   expect(localStorage.length).toBe(1)
   expect(sessionStorage.length).toBe(0)
+})
+
+test.each([
+  ['PRIVATE', false, false, 'Only you can read this job.', 'Only your workers can claim it.'],
+  ['PERMITTED_USERS', true, false, 'You and the listed users can read this job.', 'workers owned by the listed users can claim it.'],
+  ['PERMITTED_WORKERS', false, true, 'does not give its owner read access.', 'Your workers and the listed workers can claim it.'],
+  ['PERMITTED_WORKERS_AND_USERS', true, true, 'A worker grant alone does not give its owner read access.', 'the listed workers, and workers owned by the listed users can claim it.'],
+  ['ALL', false, false, 'Any authenticated user can read this job.', 'Any authenticated worker can claim it.'],
+] as const)('submits only applicable job grants for %s after switching policies', async (policy, users, workers, readHelp, claimHelp) => {
+  await enterApp('/jobs/new')
+  fillJob({})
+  fireEvent.change(screen.getByLabelText('Access policy'), { target: { value: 'PERMITTED_WORKERS_AND_USERS' } })
+  fireEvent.change(screen.getByLabelText('Permitted user IDs'), { target: { value: '12, 15 12' } })
+  fireEvent.change(screen.getByLabelText('Permitted worker IDs'), { target: { value: '17 18,17' } })
+  fireEvent.change(screen.getByLabelText('Access policy'), { target: { value: policy } })
+  expect(!!screen.queryByLabelText('Permitted user IDs')).toBe(users)
+  expect(!!screen.queryByLabelText('Permitted worker IDs')).toBe(workers)
+  const help = document.getElementById('job-policy-help')!.textContent
+  expect(help).toContain('User read access:')
+  expect(help).toContain(readHelp)
+  expect(help).toContain(claimHelp)
+  expect(help).toContain('Worker claim access:')
+  expect(help).toContain('a pending job and a matching supported job type')
+  fetchMock.mockResolvedValueOnce(response({ id: 42 }))
+  submitJob()
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  const [, options] = fetchMock.mock.calls.find(([path]) => path === '/api/jobs/')!
+  expect(JSON.parse(String(options?.body))).toEqual({
+    job_type: 'add_numbers', params: {}, permission_policy: policy,
+    ...(users ? { permitted_user_ids: [12, 15] } : {}),
+    ...(workers ? { permitted_worker_ids: [17, 18] } : {}),
+  })
+  // The read response has no policy or grants; details must not infer a policy.
+  expect(screen.queryByLabelText('Access policy')).toBeNull()
+})
+
+test.each(['job users', 'job workers', 'worker users'])('validates positive IDs for %s and allows correcting them', async (target) => {
+  const registering = target === 'worker users'
+  await enterApp(registering ? '/workers/new' : '/jobs/new')
+  if (!registering) fillJob({})
+  fireEvent.change(screen.getByLabelText(registering ? 'Visibility policy' : 'Access policy'), {
+    target: { value: target === 'job workers' ? 'PERMITTED_WORKERS' : 'PERMITTED_USERS' },
+  })
+  const ids = screen.getByLabelText(target === 'job workers' ? 'Permitted worker IDs' : 'Permitted user IDs')
+  for (const value of ['0', '-1', '1.5', '1e3', '0x10', 'NaN', 'Infinity', '12, bad', '9007199254740992']) {
+    fireEvent.change(ids, { target: { value } })
+    if (registering) fillWorkerRegistration()
+    else submitJob()
+    expect(screen.getByRole('alert').textContent).toContain('positive whole-number IDs')
+    expect(ids.getAttribute('aria-invalid')).toBe('true')
+    expect(fetchMock.mock.calls.some(([path]) => path === (registering ? '/api/workers' : '/api/jobs/'))).toBe(false)
+  }
+  fireEvent.change(ids, { target: { value: '12, 15' } })
+  fetchMock.mockResolvedValueOnce(response(registering ? { ...worker, secret_api_key: 'new-key' } : { id: 42 }))
+  if (registering) fillWorkerRegistration()
+  else submitJob()
+  await screen.findByRole('heading', { name: registering ? `${worker.name} registered` : 'Job details' })
+})
+
+test.each([
+  ['jobs', 'PERMITTED_USERS', 'Permitted user IDs', 'permitted_user_ids', 'Some permitted users do not exist'],
+  ['jobs', 'PERMITTED_WORKERS', 'Permitted worker IDs', 'permitted_worker_ids', 'Some permitted workers do not exist'],
+  ['workers', 'PERMITTED_USERS', 'Permitted user IDs', 'permitted_user_ids', 'Some permitted users do not exist'],
+])('surfaces missing records for %s %s and allows a corrected request', async (resource, policy, label, field, message) => {
+  const registering = resource === 'workers'
+  await enterApp(`/${resource}/new`)
+  if (!registering) fillJob({})
+  fireEvent.change(screen.getByLabelText(registering ? 'Visibility policy' : 'Access policy'), { target: { value: policy } })
+  fireEvent.change(screen.getByLabelText(label), { target: { value: '99999' } })
+  fetchMock.mockResolvedValueOnce(response({ detail: message }, 422))
+  if (registering) fillWorkerRegistration()
+  else submitJob()
+  expect((await screen.findByRole('alert')).textContent).toBe(message)
+  expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe('99999')
+  expect(screen.queryByText(/may have succeeded|may already have been created/)).toBeNull()
+  if (!registering) fireEvent.click(screen.getByRole('button', { name: 'Start a new submission' }))
+  fireEvent.change(screen.getByLabelText(label), { target: { value: '12' } })
+  fetchMock.mockResolvedValueOnce(response(registering ? { ...worker, secret_api_key: 'new-key' } : { id: 42 }))
+  if (registering) fillWorkerRegistration()
+  else submitJob()
+  await screen.findByRole('heading', { name: registering ? `${worker.name} registered` : 'Job details' })
+  const calls = fetchMock.mock.calls.filter(([path]) => path === (registering ? '/api/workers' : '/api/jobs/'))
+  expect(JSON.parse(String(calls[1][1]?.body))[field]).toEqual([12])
+  if (!registering) expect(new Headers(calls[1][1]?.headers).get('Idempotency-Key')).not.toBe(new Headers(calls[0][1]?.headers).get('Idempotency-Key'))
+})
+
+test.each(['jobs', 'workers'])('shows backend grant validation errors beside %s ID inputs', async (resource) => {
+  const registering = resource === 'workers'
+  await enterApp(`/${resource}/new`)
+  if (!registering) fillJob({})
+  fireEvent.change(screen.getByLabelText(registering ? 'Visibility policy' : 'Access policy'), { target: { value: 'PERMITTED_USERS' } })
+  fireEvent.change(screen.getByLabelText('Permitted user IDs'), { target: { value: '12' } })
+  fetchMock.mockResolvedValueOnce(response({ detail: [{ loc: ['body', 'permitted_user_ids', 0], msg: 'Invalid user ID', type: 'value_error' }] }, 422))
+  if (registering) fillWorkerRegistration()
+  else submitJob()
+  expect((await screen.findByRole('alert')).textContent).toContain('Invalid user ID')
+  expect(screen.getByLabelText('Permitted user IDs').getAttribute('aria-invalid')).toBe('true')
+  expect(document.getElementById(registering ? 'worker-user-ids-error' : 'job-user-ids-error')?.textContent).toBe('Invalid user ID')
+})
+
+test('retries a shared job with its original grants and key', async () => {
+  await enterApp('/jobs/new')
+  fillJob({})
+  fireEvent.change(screen.getByLabelText('Access policy'), { target: { value: 'PERMITTED_WORKERS_AND_USERS' } })
+  fireEvent.change(screen.getByLabelText('Permitted user IDs'), { target: { value: '12' } })
+  fireEvent.change(screen.getByLabelText('Permitted worker IDs'), { target: { value: '17' } })
+  fetchMock.mockRejectedValueOnce(new TypeError('Connection lost'))
+  submitJob()
+  await screen.findByRole('alert')
+  for (const label of ['Access policy', 'Permitted user IDs', 'Permitted worker IDs']) {
+    expect(screen.getByLabelText(label).matches(':disabled')).toBe(true)
+  }
+  fetchMock.mockResolvedValueOnce(response({ id: 42 }))
+  fireEvent.click(screen.getByRole('button', { name: 'Retry submission' }))
+  await screen.findByRole('heading', { name: 'Job details' })
+  const calls = fetchMock.mock.calls.filter(([path]) => path === '/api/jobs/')
+  expect(calls).toHaveLength(2)
+  expect(calls[1][1]?.body).toBe(calls[0][1]?.body)
+  expect(new Headers(calls[1][1]?.headers).get('Idempotency-Key')).toBe(new Headers(calls[0][1]?.headers).get('Idempotency-Key'))
+  expect(JSON.parse(String(calls[1][1]?.body))).toMatchObject({ permitted_user_ids: [12], permitted_worker_ids: [17] })
+})
+
+test.each(['jobs', 'workers'])('accepts empty applicable grants for %s', async (resource) => {
+  const registering = resource === 'workers'
+  await enterApp(`/${resource}/new`)
+  if (!registering) fillJob({})
+  fireEvent.change(screen.getByLabelText(registering ? 'Visibility policy' : 'Access policy'), {
+    target: { value: registering ? 'PERMITTED_USERS' : 'PERMITTED_WORKERS_AND_USERS' },
+  })
+  fetchMock.mockResolvedValueOnce(response(registering ? { ...worker, secret_api_key: 'new-key' } : { id: 42 }))
+  if (registering) fillWorkerRegistration()
+  else submitJob()
+  await screen.findByRole('heading', { name: registering ? `${worker.name} registered` : 'Job details' })
+  const [, options] = fetchMock.mock.calls.find(([path]) => path === (registering ? '/api/workers' : '/api/jobs/'))!
+  const payload = JSON.parse(String(options?.body))
+  expect(payload.permitted_user_ids).toEqual([])
+  if (!registering) expect(payload.permitted_worker_ids).toEqual([])
 })
 
 test('submits all value types, preserving text and names, mixed lists, and empty containers', async () => {
@@ -1249,6 +1386,32 @@ test('registers privately and shows the key once with explicit copy and save ins
   await act(async () => { window.history.back() })
   await screen.findByRole('form', { name: 'Register a worker' })
   expect(screen.queryByLabelText('New worker API key')).toBeNull()
+})
+
+test.each([
+  ['PRIVATE', "Only you can view this worker's metadata."],
+  ['PERMITTED_USERS', "You and the listed users can view this worker's metadata."],
+  ['ALL', "Any authenticated user can view this worker's metadata."],
+])('registers with %s visibility and submits only applicable grants', async (policy, help) => {
+  await enterApp('/workers/new')
+  expect(screen.getByLabelText('Visibility policy').querySelectorAll('option')).toHaveLength(3)
+  fireEvent.change(screen.getByLabelText('Visibility policy'), { target: { value: 'PERMITTED_USERS' } })
+  fireEvent.change(screen.getByLabelText('Permitted user IDs'), { target: { value: '12, 15 12' } })
+  fireEvent.change(screen.getByLabelText('Visibility policy'), { target: { value: policy } })
+  expect(!!screen.queryByLabelText('Permitted user IDs')).toBe(policy === 'PERMITTED_USERS')
+  expect(screen.queryByLabelText('Permitted worker IDs')).toBeNull()
+  const description = document.getElementById('worker-policy-help')!.textContent
+  expect(description).toContain(`Worker metadata visibility: ${help}`)
+  expect(description).toContain('does not reveal the API key or allow others to claim as this worker')
+  expect(description).toContain('Job access policies determine which jobs it can claim.')
+  fetchMock.mockResolvedValueOnce(response({ ...worker, secret_api_key: 'new-key' }))
+  fillWorkerRegistration()
+  await screen.findByLabelText('New worker API key')
+  const [, options] = fetchMock.mock.calls.find(([path]) => path === '/api/workers')!
+  expect(JSON.parse(String(options?.body))).toEqual({
+    name: worker.name, supported_types: ['add_numbers', 'sum'], permission_policy: policy,
+    ...(policy === 'PERMITTED_USERS' ? { permitted_user_ids: [12, 15] } : {}),
+  })
 })
 
 test('discards the new key on reload and does not repeat registration', async () => {

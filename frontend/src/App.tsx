@@ -194,9 +194,23 @@ function AuthPage({ register = false }: { register?: boolean }) {
   )
 }
 
+const jobPolicies = {
+  PRIVATE: { label: 'Private', read: 'Only you can read this job.', claim: 'Only your workers can claim it.' },
+  PERMITTED_USERS: { label: 'Permitted users', read: 'You and the listed users can read this job.', claim: 'Your workers and workers owned by the listed users can claim it.' },
+  PERMITTED_WORKERS: { label: 'Permitted workers', read: 'Only you can read this job. Granting a worker access does not give its owner read access.', claim: 'Your workers and the listed workers can claim it.' },
+  PERMITTED_WORKERS_AND_USERS: { label: 'Permitted workers and users', read: 'You and the listed users can read this job. A worker grant alone does not give its owner read access.', claim: 'Your workers, the listed workers, and workers owned by the listed users can claim it.' },
+  ALL: { label: 'All users and workers', read: 'Any authenticated user can read this job.', claim: 'Any authenticated worker can claim it.' },
+}
+
 type JobSubmission = {
   key: string
-  payload: { job_type: string; params: Record<string, unknown>; permission_policy: 'PRIVATE' }
+  payload: {
+    job_type: string
+    params: Record<string, unknown>
+    permission_policy: keyof typeof jobPolicies
+    permitted_user_ids?: number[]
+    permitted_worker_ids?: number[]
+  }
 }
 
 function SubmitJobPage() {
@@ -204,6 +218,9 @@ function SubmitJobPage() {
   const navigate = useNavigate()
   const [submission, setSubmission] = useState<JobSubmission | null>(null)
   const [parameters, setParameters] = useState<Parameter[]>([])
+  const [policy, setPolicy] = useState<keyof typeof jobPolicies>('PRIVATE')
+  const userGrants = policy === 'PERMITTED_USERS' || policy === 'PERMITTED_WORKERS_AND_USERS'
+  const workerGrants = policy === 'PERMITTED_WORKERS' || policy === 'PERMITTED_WORKERS_AND_USERS'
   const [error, setError] = useState<ApiError | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const pending = useRef<AbortController | null>(null)
@@ -232,10 +249,22 @@ function SubmitJobPage() {
         ]))
         return
       }
+      const grants: { permitted_user_ids?: number[]; permitted_worker_ids?: number[] } = {}
+      for (const field of ['permitted_user_ids', 'permitted_worker_ids'] as const) {
+        if (field === 'permitted_user_ids' ? !userGrants : !workerGrants) continue
+        const input = String(form.get(field) ?? '').trim()
+        const values = input ? input.split(/[,\s]+/) : []
+        if (values.some((value) => !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0)) {
+          const message = 'Enter positive whole-number IDs separated by commas or whitespace.'
+          setError(new ApiError(message, null, [{ loc: [field], msg: message, type: 'value_error' }]))
+          return
+        }
+        grants[field] = [...new Set(values.map(Number))]
+      }
       // Keep this exact payload with its key until an explicit new submission.
       intended = {
         key: crypto.randomUUID(),
-        payload: { job_type: jobType, params, permission_policy: 'PRIVATE' },
+        payload: { job_type: jobType, params, permission_policy: policy, ...grants },
       }
       setSubmission(intended)
     }
@@ -302,12 +331,30 @@ function SubmitJobPage() {
             <div>
               <label htmlFor="job-policy">Access policy</label>
               <select id="job-policy" name="permission_policy" aria-describedby="job-policy-help job-policy-error"
+                value={policy} onChange={(event) => { setPolicy(event.target.value as keyof typeof jobPolicies); setError(null) }}
                 aria-invalid={!!fieldError('permission_policy')}>
-                <option value="PRIVATE">Private</option>
+                {Object.entries(jobPolicies).map(([value, { label }]) => <option key={value} value={value}>{label}</option>)}
               </select>
-              <small id="job-policy-help">Only you can read this job. Only your workers with a matching job type can claim it.</small>
+              <div id="job-policy-help">
+                <small>User read access: {jobPolicies[policy].read}</small>
+                <small>Worker claim access: {jobPolicies[policy].claim} Claiming requires a pending job and a matching supported job type.</small>
+              </div>
               <small id="job-policy-error">{fieldError('permission_policy')}</small>
             </div>
+            {userGrants && <div>
+              <label htmlFor="job-user-ids">Permitted user IDs</label>
+              <input id="job-user-ids" name="permitted_user_ids" aria-invalid={!!fieldError('permitted_user_ids')}
+                aria-describedby="job-user-ids-help job-user-ids-error" />
+              <small id="job-user-ids-help">Existing user IDs, separated by commas or whitespace. These users can read the job and their workers can claim it. Leave blank for no additional user grants.</small>
+              <small id="job-user-ids-error">{fieldError('permitted_user_ids')}</small>
+            </div>}
+            {workerGrants && <div>
+              <label htmlFor="job-worker-ids">Permitted worker IDs</label>
+              <input id="job-worker-ids" name="permitted_worker_ids" aria-invalid={!!fieldError('permitted_worker_ids')}
+                aria-describedby="job-worker-ids-help job-worker-ids-error" />
+              <small id="job-worker-ids-help">Existing worker IDs, separated by commas or whitespace. These workers can claim the job; their owners do not gain read access. Leave blank for no additional worker grants.</small>
+              <small id="job-worker-ids-error">{fieldError('permitted_worker_ids')}</small>
+            </div>}
           </fieldset>
           <div className={styles.actions}>
             <button type="submit" disabled={submitting}>{submitting ? 'Submitting…' : submission ? 'Retry submission' : 'Submit job'}</button>

@@ -143,6 +143,7 @@ export function RegisterWorkerPage() {
   const [created, setCreated] = useState<(Worker & { secret_api_key: string }) | null>(null)
   const [error, setError] = useState<ApiError | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [policy, setPolicy] = useState<Worker['permission_policy']>('PRIVATE')
   const [copyStatus, setCopyStatus] = useState('')
   const pending = useRef<AbortController | null>(null)
   useEffect(() => () => { pending.current?.abort() }, [])
@@ -165,13 +166,27 @@ export function RegisterWorkerPage() {
       ]))
       return
     }
+    let permittedUserIds: number[] | undefined
+    if (policy === 'PERMITTED_USERS') {
+      const input = String(form.get('permitted_user_ids') ?? '').trim()
+      const values = input ? input.split(/[,\s]+/) : []
+      if (values.some((value) => !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0)) {
+        const message = 'Enter positive whole-number IDs separated by commas or whitespace.'
+        setError(new ApiError(message, null, [{ loc: ['permitted_user_ids'], msg: message, type: 'value_error' }]))
+        return
+      }
+      permittedUserIds = [...new Set(values.map(Number))]
+    }
     const controller = new AbortController()
     pending.current = controller
     setSubmitting(true)
     setError(null)
     try {
       const worker = await request<Worker & { secret_api_key: string }>('/workers', {
-        method: 'POST', json: { name, supported_types: supportedTypes, permission_policy: 'PRIVATE' }, signal: controller.signal,
+        method: 'POST', json: {
+          name, supported_types: supportedTypes, permission_policy: policy,
+          ...(permittedUserIds !== undefined ? { permitted_user_ids: permittedUserIds } : {}),
+        }, signal: controller.signal,
       })
       if (!Number.isSafeInteger(worker?.id) || worker.id <= 0 || worker.user_id !== user!.id || !worker.secret_api_key) {
         throw new ApiError('Orqbit returned an invalid registration response.', null)
@@ -243,12 +258,25 @@ export function RegisterWorkerPage() {
             </div>
             <div>
               <label htmlFor="worker-policy">Visibility policy</label>
-              <select id="worker-policy" aria-describedby="worker-policy-help worker-policy-error" aria-invalid={!!fieldError('permission_policy')}>
-                <option value="PRIVATE">Private</option>
+              <select id="worker-policy" name="permission_policy" value={policy}
+                onChange={(event) => { setPolicy(event.target.value as Worker['permission_policy']); setError(null) }}
+                aria-describedby="worker-policy-help worker-policy-error" aria-invalid={!!fieldError('permission_policy')}>
+                {Object.entries(visibilityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
-              <small id="worker-policy-help">Only you can view this worker's metadata. Job access policies determine which jobs it can claim.</small>
+              <small id="worker-policy-help">Worker metadata visibility: {policy === 'PRIVATE'
+                ? "Only you can view this worker's metadata."
+                : policy === 'PERMITTED_USERS'
+                  ? "You and the listed users can view this worker's metadata."
+                  : "Any authenticated user can view this worker's metadata."} Visibility does not reveal the API key or allow others to claim as this worker. Job access policies determine which jobs it can claim.</small>
               <small id="worker-policy-error">{fieldError('permission_policy')}</small>
             </div>
+            {policy === 'PERMITTED_USERS' && <div>
+              <label htmlFor="worker-user-ids">Permitted user IDs</label>
+              <input id="worker-user-ids" name="permitted_user_ids" aria-invalid={!!fieldError('permitted_user_ids')}
+                aria-describedby="worker-user-ids-help worker-user-ids-error" />
+              <small id="worker-user-ids-help">Existing user IDs, separated by commas or whitespace. Grants metadata visibility only. Leave blank for no additional user grants.</small>
+              <small id="worker-user-ids-error">{fieldError('permitted_user_ids')}</small>
+            </div>}
             <button type="submit">{submitting ? 'Registering…' : 'Register worker'}</button>
           </fieldset>
         </form>

@@ -108,11 +108,17 @@ Add the current user's worker list, type filtering, pagination, details, and reg
 
 **Verification:** `npm test` passed all 167 tests; `npm run lint`, `npm run build`, and `git diff --check` passed. Focused tests cover ownership, direct routes, metadata and supported types, URL filtering and pagination across reload and Back/Forward, empty/loading/error states, invalid links and offsets, registration validation, duplicate-name correction, uncertain responses, duplicate submission prevention, cancellation, explicit copy and clipboard failure, one-time display across navigation/reload, browser storage exclusion, list refresh, and account cache isolation. Tests and the Vite build required execution outside the sandbox because child-process startup fails there with `spawn EPERM`. One intermediate run overlapping the build timed out in an existing parameter-editor test; the final isolated full-suite run passed without configuration changes. Verification used mocked API responses; a real-backend browser walkthrough was not run for this change. No backend, schema, dependency, configuration, or infrastructure changes were needed.
 
-## 8. Remaining access policies
+## 8. Remaining access policies — completed
 
 Extend job submission and worker registration with their supported policies and conditional ID inputs. Explain the selected policy beside its controls. Validate positive IDs and surface backend errors for missing records.
 
 **Done when:** only applicable grant lists are submitted and the UI distinguishes user read access, worker claim access, and worker metadata visibility. Use explicit IDs where needed: the current API has no general user directory for a searchable user picker. Job detail responses do not expose their permission policy or grant lists.
+
+**Implemented:** Job submission offers all five policies: `PRIVATE`, `PERMITTED_USERS`, `PERMITTED_WORKERS`, `PERMITTED_WORKERS_AND_USERS`, and `ALL`. The selected policy explains user read access separately from worker claim access, including that a worker grant alone does not give its owner read access. Worker registration offers `PRIVATE`, `PERMITTED_USERS`, and `ALL`, explaining metadata visibility without granting API-key access or permission to act as that worker. Both forms default to private.
+
+Only applicable user/worker ID inputs appear, and only the corresponding grant lists are submitted. Explicit existing IDs accept commas or whitespace; duplicates are removed. Blank applicable lists submit as empty arrays. Nonpositive, fractional, nondecimal, and unsafe integer IDs are rejected before a request, with errors beside the affected input. Backend missing-record errors remain visible while preserving the draft; backend field errors appear inline. Job retries retain the original policy, grants, payload, and idempotency key; changing a rejected request uses the existing Start a new submission action. Job details do not infer or display unavailable policy data, and browsing remains limited to the current user's records.
+
+**Verification:** `npm test` passed all 186 tests, including 19 new policy cases covering every supported policy, conditional inputs and payloads after switching policies, deduplication, empty grants, invalid IDs and correction, missing-record responses and correction, inline backend grant errors, and retry identity. `npm run lint`, `npm run build`, and `git diff --check` passed. Tests and the Vite build required execution outside the sandbox because child-process startup fails there with `spawn EPERM`. Verification used mocked API responses; no live-backend/browser walkthrough was performed. No backend, schema, dependency, or configuration changes were needed.
 
 ## 9. Usability and verification review
 
