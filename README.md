@@ -1,4 +1,8 @@
-# Orqbit
+<h1 align="center">Orqbit</h1>
+
+<p align="center">
+  <img src="assets/orqbit-icon.svg" alt="Orqbit icon" width="192" height="192" />
+</p>
 
 **Submit work. Process it independently. Track the outcome.**
 
