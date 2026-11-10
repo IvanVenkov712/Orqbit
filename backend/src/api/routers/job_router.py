@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 import fastapi
 from fastapi import Header, HTTPException, Query
@@ -47,6 +47,7 @@ def list_jobs(
     job_type: str | None = None,
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    sort: Literal["status_updated"] | None = None,
 ):
     stmt = accessible_user_jobs_query(user).options(selectinload(Job.attempts))
 
@@ -59,12 +60,12 @@ def list_jobs(
     if job_type is not None:
         stmt = stmt.where(Job.job_type == job_type)
 
-    stmt = (
-        stmt
-        .order_by(Job.id.desc())
-        .offset(offset)
-        .limit(limit)
-    )
+    if sort == "status_updated":
+        stmt = stmt.order_by(Job.status, Job.updated_at.desc(), Job.id.desc())
+    else:
+        stmt = stmt.order_by(Job.id.desc())
+
+    stmt = stmt.offset(offset).limit(limit)
 
     return session.scalars(stmt).all()
 

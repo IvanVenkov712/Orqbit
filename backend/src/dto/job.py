@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 from pydantic import (
@@ -34,6 +35,8 @@ class JobRead(BaseModel):
     error: dict[str, Any] | None = None
     status: JobStatus
     attempt_ids: list[int] = Field(validation_alias="attempts")
+    created_at: datetime
+    updated_at: datetime
 
     @field_validator("attempt_ids", mode="before")
     @classmethod

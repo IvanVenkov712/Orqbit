@@ -12,6 +12,7 @@ const storageKey = 'orqbit.access_token'
 const job = {
   id: 42, user_id: user.id, job_type: 'add_numbers', status: 'SUCCEEDED',
   params: { numbers: [2, 3, 5] }, result: { sum: 10 }, error: null,
+  created_at: '2026-11-10T08:00:00Z', updated_at: '2026-11-10T09:30:00Z',
 }
 const attempt = {
   id: 19, job_id: job.id, worker_id: 12, job_type: job.job_type,
@@ -686,27 +687,52 @@ test('a rejected job credential ends the session and returns to login', async ()
   expect(screen.queryByRole('form', { name: 'Submit a job' })).toBeNull()
 })
 
-test('lists the current user’s jobs with owner, readable name, type, status, and links to details', async () => {
+test('lists the current user’s jobs with owner, type, status, readable dates, and links to details', async () => {
   const original = fetchMock.getMockImplementation()!
   fetchMock.mockImplementation(async (path, options) => String(path).startsWith('/api/jobs?')
     ? response([job, { ...job, id: 43, job_type: 'generate_report', status: 'FAILED' }, { ...job, id: 44, user_id: 999 }])
     : original(path, options))
   await enterApp()
   const table = await screen.findByRole('table', { name: 'Submitted jobs' })
-  expect(within(table).getAllByRole('columnheader').map((header) => header.textContent)).toEqual(['Owner', 'Name', 'Type', 'Status'])
+  expect(within(table).getAllByRole('columnheader').map((header) => header.textContent)).toEqual(['Owner', 'Type', 'Status', 'Created', 'Last updated'])
   expect(within(table).getAllByText('demo-user')).toHaveLength(2)
   expect(within(table).getByText('generate_report')).toBeTruthy()
-  expect(within(table).getByText('Failed')).toBeTruthy()
-  expect(screen.queryByRole('link', { name: 'Add numbers #44' })).toBeNull()
-  const request = fetchMock.mock.calls.find(([path]) => path === '/api/jobs?owner_id=7&limit=20&offset=0')
+  expect(within(table).getByRole('rowgroup', { name: 'Failed jobs' })).toBeTruthy()
+  const dates = within(table).getByRole('link', { name: 'View job #42' }).closest('tr')!.querySelectorAll('time')
+  expect([...dates].map((date) => date.dateTime)).toEqual([job.created_at, job.updated_at])
+  expect(dates[0].textContent).toBe(new Date(job.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))
+  expect(dates[1].textContent).toBe(new Date(job.updated_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))
+  expect(screen.queryByRole('link', { name: 'View job #44' })).toBeNull()
+  const request = fetchMock.mock.calls.find(([path]) => path === '/api/jobs?owner_id=7&limit=20&offset=0&sort=status_updated')
   expect(request).toBeTruthy()
   expect(new Headers(request?.[1]?.headers).get('Authorization')).toMatch(/^Bearer /)
-  fireEvent.click(within(table).getByRole('link', { name: 'Add numbers #42' }))
+  fireEvent.click(within(table).getByRole('link', { name: 'View job #42' }))
   await screen.findByRole('region', { name: 'Job overview' })
   expect(window.location.pathname).toBe('/jobs/42')
   fireEvent.click(screen.getByRole('link', { name: 'Back to Jobs' }))
   await screen.findByRole('table', { name: 'Submitted jobs' })
   expect(window.location.pathname).toBe('/jobs')
+})
+
+test('groups jobs by status and preserves the API’s newest-update-first order within each group', async () => {
+  const original = fetchMock.getMockImplementation()!
+  const page = [
+    { ...job, id: 10, status: 'PENDING', updated_at: '2026-11-10T10:00:00Z' },
+    { ...job, id: 20, status: 'PENDING', updated_at: '2026-11-10T08:00:00Z' },
+    { ...job, id: 30, status: 'RUNNING', updated_at: '2026-11-10T09:00:00Z' },
+    { ...job, id: 40, status: 'SUCCEEDED', updated_at: '2026-11-10T11:00:00Z' },
+    { ...job, id: 50, status: 'SUCCEEDED', updated_at: '2026-11-10T07:00:00Z' },
+    { ...job, id: 60, status: 'FAILED', updated_at: '2026-11-10T12:00:00Z' },
+  ]
+  fetchMock.mockImplementation(async (path, options) => String(path).startsWith('/api/jobs?') ? response(page) : original(path, options))
+  await enterApp()
+  const table = await screen.findByRole('table', { name: 'Submitted jobs' })
+  expect([...table.querySelectorAll('tbody')].map((group) => group.getAttribute('aria-label'))).toEqual(['Pending jobs', 'Running jobs', 'Succeeded jobs', 'Failed jobs'])
+  const pending = within(table).getByRole('rowgroup', { name: 'Pending jobs' })
+  expect(within(pending).getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual(['/jobs/10', '/jobs/20'])
+  const succeeded = within(table).getByRole('rowgroup', { name: 'Succeeded jobs' })
+  expect(within(succeeded).getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual(['/jobs/40', '/jobs/50'])
+  expect(within(table).queryByRole('columnheader', { name: 'Name' })).toBeNull()
 })
 
 test('shows a clear empty jobs list and keeps submission available', async () => {
@@ -730,7 +756,7 @@ test('shows loading and allows retry when the jobs list request fails', async ()
   expect((await screen.findByRole('alert')).textContent).toContain('temporarily unavailable')
   expect(document.body.textContent).not.toContain('internal details')
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
-  await screen.findByRole('link', { name: 'Add numbers #42' })
+  await screen.findByRole('link', { name: 'View job #42' })
 })
 
 test('pages through all own jobs, preserves the URL, and handles the final empty page', async () => {
@@ -744,20 +770,20 @@ test('pages through all own jobs, preserves the URL, and handles the final empty
     return original(path, options)
   })
   await enterApp('/jobs?view=all')
-  await screen.findByRole('link', { name: 'Add numbers #20' })
+  await screen.findByRole('link', { name: 'View job #20' })
   fireEvent.click(screen.getByRole('button', { name: 'Next jobs' }))
   await screen.findByText('No more jobs on this page.')
   expect(window.location.search).toBe('?view=all&offset=20')
   expect((screen.getByRole('button', { name: 'Next jobs' }) as HTMLButtonElement).disabled).toBe(true)
   fireEvent.click(screen.getByRole('button', { name: 'Previous jobs' }))
-  await screen.findByRole('link', { name: 'Add numbers #20' })
+  await screen.findByRole('link', { name: 'View job #20' })
   expect(window.location.search).toBe('?view=all')
 })
 
 test.each(['-1', 'abc', '1.5', '9007199254740992'])('loads the first jobs page for invalid offset %s', async (offset) => {
   await enterApp(`/jobs?offset=${offset}`)
   await screen.findByRole('table', { name: 'Submitted jobs' })
-  expect(fetchMock.mock.calls.some(([path]) => path === '/api/jobs?owner_id=7&limit=20&offset=0')).toBe(true)
+  expect(fetchMock.mock.calls.some(([path]) => path === '/api/jobs?owner_id=7&limit=20&offset=0&sort=status_updated')).toBe(true)
 })
 
 test('shows only the latest attempt on details and opens the separate paginated history', async () => {

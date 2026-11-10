@@ -9,6 +9,8 @@ type Job = {
   user_id: number
   job_type: string
   status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+  created_at: string
+  updated_at: string
 }
 
 const statusLabels = { PENDING: 'Pending', RUNNING: 'Running', SUCCEEDED: 'Succeeded', FAILED: 'Failed' }
@@ -23,7 +25,7 @@ export function JobsPage() {
     queryKey: ['jobs', user?.id, offset],
     enabled: !!user,
     queryFn: async ({ signal }) => {
-      const page = await request<Job[]>(`/jobs?owner_id=${user!.id}&limit=${pageSize}&offset=${offset}`, { signal })
+      const page = await request<Job[]>(`/jobs?owner_id=${user!.id}&limit=${pageSize}&offset=${offset}&sort=status_updated`, { signal })
       return page.filter((job) => job.user_id === user!.id)
     },
     refetchInterval: (query) => query.state.status !== 'error' && query.state.data?.some((job) => job.status === 'PENDING' || job.status === 'RUNNING') ? 3000 : false,
@@ -48,15 +50,20 @@ export function JobsPage() {
         <button type="button" onClick={() => { void jobs.refetch() }}>Try again</button>
       </> : jobs.data.length === 0 ? <p>{offset ? 'No more jobs on this page.' : 'No jobs submitted yet.'}</p> : <div className={styles.tableContainer}>
         <table className={styles.jobsTable} aria-label="Submitted jobs">
-          <thead><tr><th scope="col">Owner</th><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Status</th></tr></thead>
-          <tbody>{jobs.data.map((job) => <tr className={styles.jobRow} key={job.id}>
-            <td>{user?.username}</td>
-            <td><Link className={styles.jobLink} to={`/jobs/${job.id}`}>
-              {job.job_type.replace(/[_-]+/g, ' ').replace(/^./, (letter) => letter.toUpperCase())} #{job.id}
-            </Link></td>
-            <td>{job.job_type}</td>
-            <td>{statusLabels[job.status]}</td>
-          </tr>)}</tbody>
+          <thead><tr><th scope="col">Owner</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col">Last updated</th></tr></thead>
+          {Object.entries(statusLabels).map(([status, label]) => {
+            const group = jobs.data.filter((job) => job.status === status)
+            return group.length > 0 && <tbody key={status} aria-label={`${label} jobs`}>
+              <tr><th scope="rowgroup" colSpan={5}>{label}</th></tr>
+              {group.map((job) => <tr className={styles.jobRow} key={job.id}>
+                <td>{user?.username}</td>
+                <td><Link className={styles.jobLink} to={`/jobs/${job.id}`} aria-label={`View job #${job.id}`}>{job.job_type}</Link></td>
+                <td>{statusLabels[job.status]}</td>
+                <td><time dateTime={job.created_at}>{new Date(job.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</time></td>
+                <td><time dateTime={job.updated_at}>{new Date(job.updated_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</time></td>
+              </tr>)}
+            </tbody>
+          })}
         </table>
       </div>}
       {!jobs.isPending && !jobs.isError && (offset > 0 || jobs.data.length === pageSize) && <nav className={styles.actions} aria-label="Job pages">

@@ -894,6 +894,71 @@ def test_list_jobs_filters_and_paginates(client, database, user, user_headers):
     assert [job["id"] for job in response.json()] == [first_id]
 
 
+def test_list_jobs_orders_by_status_and_update_time_before_pagination(
+    client, database, user, user_headers
+):
+    start = datetime(2026, 11, 10, tzinfo=UTC)
+    with Session(database) as session:
+        jobs = [
+            Job(
+                user_id=user.id,
+                job_type="example",
+                params={},
+                status=status,
+                created_at=start,
+                updated_at=start + timedelta(hours=hours),
+                idempotency_key=uuid4().hex,
+                request_fingerprint="test-fingerprint",
+            )
+            for status, hours in [
+                (JobStatus.PENDING, 9),
+                (JobStatus.FAILED, 10),
+                (JobStatus.PENDING, 2),
+                (JobStatus.RUNNING, 3),
+                (JobStatus.SUCCEEDED, 6),
+                (JobStatus.PENDING, 9),
+            ]
+        ]
+        session.add_all(jobs)
+        session.commit()
+        ids = [job.id for job in jobs]
+
+    params = {"owner_id": user.id, "sort": "status_updated"}
+    expected = [ids[index] for index in (5, 0, 2, 3, 4, 1)]
+    response = client.get("/jobs", headers=user_headers, params=params)
+    assert response.status_code == 200
+    assert [job["id"] for job in response.json()] == expected
+    assert datetime.fromisoformat(response.json()[0]["created_at"]) == start
+    assert datetime.fromisoformat(response.json()[0]["updated_at"]) == (
+        start + timedelta(hours=9)
+    )
+
+    for offset in (0, 2, 4):
+        response = client.get(
+            "/jobs",
+            headers=user_headers,
+            params={**params, "limit": 2, "offset": offset},
+        )
+        assert response.status_code == 200
+        assert [job["id"] for job in response.json()] == expected[offset:offset + 2]
+
+    response = client.get(
+        "/jobs", headers=user_headers, params={**params, "status": "PENDING"}
+    )
+    assert response.status_code == 200
+    assert [job["id"] for job in response.json()] == expected[:3]
+
+    # Existing API clients keep the default newest-ID-first ordering.
+    response = client.get("/jobs", headers=user_headers)
+    assert response.status_code == 200
+    assert [job["id"] for job in response.json()] == ids[::-1]
+
+
+def test_list_jobs_rejects_unknown_sort(client, user_headers):
+    response = client.get("/jobs?sort=unknown", headers=user_headers)
+    assert response.status_code == 422
+
+
 @pytest.mark.parametrize("inactive", [False, True])
 def test_claim_rejects_invalid_or_inactive_worker(
     client, database, claim_worker, inactive
