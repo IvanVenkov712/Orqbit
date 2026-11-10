@@ -4,9 +4,9 @@ Build a small operational dashboard around Orqbit's existing public HTTP API. Pr
 
 ## Current state
 
-The frontend contains a React/TypeScript application shell with React Router, a light responsive layout, Jobs/Workers navigation, login and registration forms, a current-user area with logout, protected application routes, and private job submission. Browsing and detail screens remain explicitly labeled placeholders. Vite and Nginx proxy `/api` to the backend. Docker Compose includes a frontend service on port 8080.
+The frontend contains a React/TypeScript application shell with React Router, a light responsive layout, Jobs/Workers navigation, login and registration forms, a current-user area with logout, protected application routes, private job submission, and job details with execution history. Job details currently display only the signed-in user's own jobs, using their username for the creator. Job browsing and worker screens remain explicitly labeled placeholders. Vite and Nginx proxy `/api` to the backend. Docker Compose includes a frontend service on port 8080.
 
-Steps 1–4 are implemented; steps 5–9 remain planned. Vitest, jsdom, and React Testing Library provide focused tests through `npm test`. Shared HTTP transport, persistent token authentication, and job submission are available; job/worker browsing, details, worker registration, and TanStack Query are not implemented yet.
+Steps 1–5 are implemented; steps 6–9 remain planned. Vitest, jsdom, and React Testing Library provide focused tests through `npm test`. TanStack Query caches job details and polls active jobs alongside their attempt history; the authenticated-route cache is discarded on logout or session expiry. Job/worker browsing, worker details, and worker registration remain planned.
 
 Treat each milestone as a separate change, splitting it further when necessary. Prefer changes to one to three files; explain additional files when directly necessary. Add dependencies only when their behavior is introduced. Each behavior change should include focused verification, rather than postponing testing until the final milestone.
 
@@ -66,13 +66,19 @@ Each intended submission retains a fixed payload and key in memory while the for
 
 **Verification:** `npm test` passed all 91 tests. Editor cases cover all value types, nested objects and mixed lists, empty values/containers, blank and duplicate names, invalid/non-finite numbers, add/remove behavior, type changes, correction after validation errors, and draft preservation. Submission cases continue to cover private authenticated requests, navigation, repeated network retries, server/malformed/empty responses, backend validation and conflicts, fresh keys for edited or explicitly new requests, duplicate prevention, cancellation, and authentication rejection. `npm run lint` and `npm run build` passed. Tests/build ran outside the sandbox because Vite child-process startup previously failed with `spawn EPERM`. Tests mock the API; no live-backend/browser walkthrough was performed. No dependencies or backend contracts changed.
 
-## 5. Job details and the first complete flow
+## 5. Job details and the first complete flow — completed
 
-Display status, job/creator IDs, type, parameters, result/error, and paginated execution attempts. Add TanStack Query for server data and polling. Refresh pending/running job details every few seconds while visible; stop polling terminal jobs. Refresh attempt history alongside the job so the final outcome appears there too.
+Display status, job identifier, creator username, type, parameters, result/error, and paginated execution attempts. Initially display only the signed-in user's own jobs, identifying the creator through the current session rather than displaying user IDs or adding a user lookup endpoint. Add TanStack Query for server data and polling. Refresh pending/running job details every few seconds while visible; stop polling terminal jobs. Refresh attempt history alongside the job so the final outcome appears there too.
 
-**Done when:** accessible jobs render, missing/inaccessible jobs show a useful unavailable state, and polling stops on completion. Run the full demonstration: login, submit an `add_numbers` job, process it with the independent [example worker](../../docs/example-worker.md), and observe the stored result.
+**Done when:** the current user's jobs render, missing/inaccessible/other users' jobs show a useful unavailable state, and polling stops on completion. Run the full demonstration: login, submit an `add_numbers` job, process it with the independent [example worker](../../docs/example-worker.md), and observe the stored result.
 
 This is the first useful end-to-end checkpoint. Claiming and execution remain in the external worker.
+
+**Implemented:** `/jobs/:jobId` shows readable status labels, the job number, `@username (you)`, the exact job type, formatted parameters and result/error, and execution attempts with status, local timestamps, and their stored outcomes. The frontend checks the returned creator ID before displaying the job or fetching history; this is a UI restriction, and backend access policies remain unchanged. Missing, inaccessible, other-user, and invalid job links show an unavailable state. Request failures offer a retry; an attempt-history failure preserves job details with a separate retry action.
+
+A single TanStack Query fetch loads the job followed by the selected attempt page. Pending/running snapshots refresh every three seconds while visible; a terminal snapshot includes a fresh attempt-history request before stopping its interval. Query cancellation follows navigation/logout. Pagination uses ten attempts per page with Previous/Next controls and an `offset` URL parameter, preserving other query parameters and avoiding invented totals. An empty next page offers a way back. No worker execution is added to the API or frontend.
+
+**Verification:** `npm test` passed all 113 tests; `npm run lint` and `npm run build` passed. Tests cover own-job display, usernames, failed outcomes, missing/inaccessible/other-user jobs, invalid links/offsets, loading/retry states, pagination, attempt-history failures, pending/running polling, final success/failure history, stopped polling, hidden-tab suspension, navigation cancellation, and cache removal across accounts. Tests/build required execution outside the sandbox because Vite child-process startup fails there with `spawn EPERM`. A headless Edge demonstration signed in, submitted `add_numbers` with `[2,3,5]`, processed it using the independent worker's own interpreter and `run_once`, and observed `SUCCEEDED` with `{"sum":10}` in both job and attempt. No additional requests occurred over 6.5 seconds after completion; reloading preserved the result, and the layout had no horizontal overflow at 320px. Backend contracts and schema are unchanged.
 
 ## 6. Jobs browsing
 

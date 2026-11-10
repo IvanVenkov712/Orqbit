@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   BrowserRouter,
   Link,
@@ -13,6 +14,7 @@ import {
 } from 'react-router'
 import { ApiError, apiRequest } from './api/client'
 import { AuthProvider, useAuth } from './auth'
+import { JobDetailsPage } from './JobDetailsPage'
 import { ParameterEditor, readParameters } from './ParameterEditor'
 import type { Parameter } from './ParameterEditor'
 import orqbitIcon from './assets/orqbit-icon.svg'
@@ -104,8 +106,15 @@ function SessionStatus() {
 function RequireAuth() {
   const { user, restoring, restoreError } = useAuth()
   const location = useLocation()
+  const [queryClient] = useState(() => new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  }))
+  // Leaving the authenticated routes (including logout/expiry) discards their cache.
+  useEffect(() => () => { queryClient.clear() }, [queryClient])
   if (restoring || restoreError) return <SessionStatus />
-  return user ? <Outlet /> : <Navigate to="/login" replace state={{ from: location.pathname + location.search + location.hash }} />
+  return user
+    ? <QueryClientProvider client={queryClient}><Outlet /></QueryClientProvider>
+    : <Navigate to="/login" replace state={{ from: location.pathname + location.search + location.hash }} />
 }
 
 function AuthPage({ register = false }: { register?: boolean }) {
@@ -362,7 +371,7 @@ function App() {
             <Route element={<RequireAuth />}>
               <Route path="jobs" element={<Placeholder title="Jobs" description="A place to submit work and follow its outcome." />} />
               <Route path="jobs/new" element={<SubmitJobPage />} />
-              <Route path="jobs/:jobId" element={<Placeholder title="Job details" description="Inspect a job, its result, and its execution attempts." />} />
+              <Route path="jobs/:jobId" element={<JobDetailsPage />} />
               <Route path="workers" element={<Placeholder title="Workers" description="A place to register and inspect independent workers." />} />
               <Route path="workers/:workerId" element={<Placeholder title="Worker details" description="Inspect a worker's registration and supported job types." />} />
             </Route>

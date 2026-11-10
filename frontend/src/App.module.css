@@ -246,6 +246,41 @@
   gap: var(--space-3);
 }
 
+.jobDetails {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+.metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-8);
+}
+
+.metadata dt {
+  color: var(--color-text-secondary);
+}
+
+.metadata dd {
+  margin: var(--space-1) 0 0;
+  overflow-wrap: anywhere;
+}
+
+.json {
+  max-width: 100%;
+  padding: var(--space-4);
+  border-radius: var(--radius);
+  background: var(--color-background);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.attempt {
+  padding-block: var(--space-4);
+  border-top: 1px solid var(--color-divider);
+}
+
 @media (max-width: 600px) {
   .headerInner {
     padding: var(--space-4);

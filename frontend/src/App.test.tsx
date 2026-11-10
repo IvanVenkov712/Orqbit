@@ -1,5 +1,5 @@
 ﻿// @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { StrictMode } from 'react'
 import App from './App'
@@ -9,6 +9,16 @@ import orqbitIcon from './assets/orqbit-icon.svg'
 const user = { id: 7, username: 'demo-user', email: 'demo@example.com', full_name: 'Demo User', active: true, role: 'REGULAR' }
 const fetchMock = vi.fn<typeof fetch>()
 const storageKey = 'orqbit.access_token'
+const job = {
+  id: 42, user_id: user.id, job_type: 'add_numbers', status: 'SUCCEEDED',
+  params: { numbers: [2, 3, 5] }, result: { sum: 10 }, error: null,
+}
+const attempt = {
+  id: 19, job_id: job.id, worker_id: 12, job_type: job.job_type,
+  attempt_number: 1, status: 'SUCCEEDED', params: job.params,
+  result: job.result, error: null,
+  created_at: '2026-11-10T08:00:00Z', updated_at: '2026-11-10T08:00:01Z',
+}
 
 function token(expiresAt = Date.now() + 30 * 60_000) {
   return `header.${btoa(JSON.stringify({ sub: user.username, exp: Math.floor(expiresAt / 1000) }))}.signature`
@@ -26,6 +36,8 @@ beforeEach(() => {
   fetchMock.mockImplementation(async (path) => {
     if (path === '/api/auth/login') return response({ access_token: token(), token_type: 'bearer' })
     if (path === '/api/users/me/' || path === '/api/auth/register') return response(user)
+    if (/^\/api\/jobs\/\d+$/.test(String(path))) return response(job)
+    if (String(path).startsWith('/api/jobs/42/attempts?')) return response([attempt])
     throw new Error('Unexpected request')
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -34,6 +46,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
@@ -176,6 +189,9 @@ test.each([
   if (path === '/jobs/new') {
     expect(screen.queryByText('Planned screen')).toBeNull()
     expect(screen.getByRole('form', { name: 'Submit a job' })).toBeTruthy()
+  } else if (path === '/jobs/42') {
+    expect(screen.queryByText('Planned screen')).toBeNull()
+    expect(await screen.findByRole('region', { name: 'Job overview' })).toBeTruthy()
   } else {
     expect(screen.getByText('Planned screen')).toBeTruthy()
     expect(screen.getByText('You are signed in. This screen does not load live data yet.')).toBeTruthy()
@@ -566,11 +582,12 @@ test('retries an uncertain submission repeatedly with its original key and paylo
   fetchMock.mockResolvedValueOnce(response({ id: 42 }))
   fireEvent.click(screen.getByRole('button', { name: 'Retry submission' }))
   await screen.findByRole('heading', { level: 1, name: 'Job details' })
-  for (const call of fetchMock.mock.calls.slice(3)) {
+  const retries = fetchMock.mock.calls.slice(3).filter(([path]) => path === '/api/jobs/')
+  for (const call of retries) {
     expect(call[1]?.body).toBe(fetchMock.mock.calls[2][1]?.body)
     expect(new Headers(call[1]?.headers).get('Idempotency-Key')).toBe(new Headers(fetchMock.mock.calls[2][1]?.headers).get('Idempotency-Key'))
   }
-  expect(fetchMock).toHaveBeenCalledTimes(5)
+  expect(retries).toHaveLength(2)
   expect(window.location.pathname).toBe('/jobs/42')
 })
 
@@ -663,7 +680,207 @@ test('a rejected job credential ends the session and returns to login', async ()
   expect(screen.queryByRole('form', { name: 'Submit a job' })).toBeNull()
 })
 
-// Exercise the authenticated request boundary before feature data screens exist.
+test('shows own job details with a username, formatted parameters, stored result, and attempt outcome', async () => {
+  await enterApp('/jobs/42')
+  const overview = await screen.findByRole('region', { name: 'Job overview' })
+  expect(overview.textContent).toContain('@demo-user (you)')
+  expect(overview.textContent).not.toContain('User ID')
+  expect(within(overview).getByRole('status').textContent).toBe('Succeeded')
+  expect(screen.getByRole('region', { name: 'Parameters' }).textContent).toContain(JSON.stringify(job.params, null, 2))
+  expect(screen.getByRole('region', { name: 'Outcome' }).textContent).toContain('"sum": 10')
+  const history = screen.getByRole('region', { name: 'Execution attempts' })
+  expect(within(history).getByRole('article', { name: 'Attempt 1' }).textContent).toContain('"sum": 10')
+  expect(history.querySelector('time')?.dateTime).toBe(attempt.created_at)
+  expect(history.textContent).not.toMatch(/worker_id|User ID|Worker ID/)
+})
+
+test('shows a failed job and its attempt error as text', async () => {
+  const error = { message: '<script>unsafe()</script>', code: 'INVALID_PARAMS' }
+  fetchMock.mockImplementation(async (path) => {
+    if (path === '/api/auth/login') return response({ access_token: token() })
+    if (path === '/api/users/me/') return response(user)
+    if (path === '/api/jobs/42') return response({ ...job, status: 'FAILED', result: null, error })
+    return response([{ ...attempt, status: 'FAILED', result: null, error }])
+  })
+  await enterApp('/jobs/42')
+  await screen.findByRole('region', { name: 'Job overview' })
+  expect(screen.getByRole('status').textContent).toBe('Failed')
+  expect(screen.getByRole('region', { name: 'Outcome' }).textContent).toContain(error.message)
+  expect(screen.getByRole('article', { name: 'Attempt 1' }).textContent).toContain(error.message)
+  expect(document.querySelector('main script')).toBeNull()
+})
+
+test.each([403, 404])('shows an unavailable state for an inaccessible or missing job (HTTP %s)', async (status) => {
+  localStorage.setItem(storageKey, token())
+  fetchMock.mockImplementation(async (path) => path === '/api/users/me/' ? response(user) : response({ detail: 'Job not found' }, status))
+  window.history.replaceState(null, '', '/jobs/42')
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Job unavailable' })
+  expect(screen.getByRole('link', { name: 'Back to Jobs' })).toBeTruthy()
+  expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/attempts'))).toBe(false)
+})
+
+test('does not display another user’s accessible job or fetch its history', async () => {
+  localStorage.setItem(storageKey, token())
+  fetchMock.mockImplementation(async (path) => path === '/api/users/me/' ? response(user) : response({ ...job, user_id: 888, params: { private: 'other creator data' } }))
+  window.history.replaceState(null, '', '/jobs/42')
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Job unavailable' })
+  expect(document.body.textContent).not.toContain('other creator data')
+  expect(document.body.textContent).not.toContain('888')
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+})
+
+test.each(['0', '-1', 'abc', '1.5', '9007199254740992'])('rejects invalid job identifier %s without a job request', async (id) => {
+  await enterApp(`/jobs/${id}`)
+  await screen.findByRole('heading', { name: 'Job unavailable' })
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+})
+
+test('shows loading while fetching details and allows retry after a safe server error', async () => {
+  localStorage.setItem(storageKey, token())
+  let resolve!: (value: Response) => void
+  fetchMock.mockImplementationOnce(async () => response(user))
+  fetchMock.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+  window.history.replaceState(null, '', '/jobs/42')
+  render(<App />)
+  await screen.findByText('Loading job details…')
+  await act(async () => { resolve(response({ detail: 'private server error' }, 503)) })
+  expect((await screen.findByRole('alert')).textContent).toContain('temporarily unavailable')
+  expect(document.body.textContent).not.toContain('private server error')
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await screen.findByRole('region', { name: 'Job overview' })
+})
+
+test('paginates attempts in the URL and preserves unrelated query parameters', async () => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => {
+    if (String(path).includes('/attempts?')) {
+      const offset = Number(new URL(String(path), 'http://localhost').searchParams.get('offset'))
+      return response(offset === 0 ? Array.from({ length: 10 }, (_, i) => ({ ...attempt, id: i + 2, attempt_number: 11 - i })) : [attempt])
+    }
+    return original(path, options)
+  })
+  await enterApp('/jobs/42?view=history')
+  await screen.findByRole('article', { name: 'Attempt 11' })
+  expect((screen.getByRole('button', { name: 'Previous attempts' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Next attempts' }))
+  await screen.findByRole('article', { name: 'Attempt 1' })
+  expect(window.location.search).toBe('?view=history&offset=10')
+  expect(screen.queryByRole('article', { name: 'Attempt 11' })).toBeNull()
+  expect((screen.getByRole('button', { name: 'Next attempts' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Previous attempts' }))
+  await screen.findByRole('article', { name: 'Attempt 11' })
+  expect(window.location.search).toBe('?view=history')
+})
+
+test.each(['-1', 'abc', '1.5', '9007199254740992'])('uses the first attempt page for invalid offset %s', async (offset) => {
+  await enterApp(`/jobs/42?offset=${offset}`)
+  await screen.findByRole('region', { name: 'Job overview' })
+  expect(fetchMock.mock.calls.some(([path]) => path === '/api/jobs/42/attempts?limit=10&offset=0')).toBe(true)
+})
+
+test('retains job details when attempt history fails and allows retry', async () => {
+  const original = fetchMock.getMockImplementation()!
+  let failed = true
+  fetchMock.mockImplementation(async (path, options) => {
+    if (String(path).includes('/attempts?') && failed) return response({}, 503)
+    return original(path, options)
+  })
+  await enterApp('/jobs/42')
+  await screen.findByRole('alert')
+  expect(screen.getByRole('region', { name: 'Outcome' }).textContent).toContain('"sum": 10')
+  failed = false
+  fireEvent.click(screen.getByRole('button', { name: 'Retry attempt history' }))
+  await screen.findByRole('article', { name: 'Attempt 1' })
+})
+
+test('shows an empty attempt page with a way back', async () => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => String(path).includes('/attempts?') ? response([]) : original(path, options))
+  await enterApp('/jobs/42?offset=10')
+  await screen.findByText('No more execution attempts on this page.')
+  expect((screen.getByRole('button', { name: 'Previous attempts' }) as HTMLButtonElement).disabled).toBe(false)
+  expect((screen.getByRole('button', { name: 'Next attempts' }) as HTMLButtonElement).disabled).toBe(true)
+})
+
+test.each(['SUCCEEDED', 'FAILED'])('polls pending/running jobs and history, fetches final attempt, then stops for %s', async (terminalStatus) => {
+  vi.useFakeTimers()
+  localStorage.setItem(storageKey, token())
+  window.history.replaceState(null, '', '/jobs/42')
+  let status = 'PENDING'
+  fetchMock.mockImplementation(async (path) => {
+    if (path === '/api/users/me/') return response(user)
+    const result = status === 'SUCCEEDED' ? { sum: 10 } : null
+    const error = status === 'FAILED' ? { message: 'Invalid numbers' } : null
+    if (path === '/api/jobs/42') return response({ ...job, status, result, error })
+    return response(status === 'PENDING' ? [] : [{ ...attempt, status, result, error }])
+  })
+  await act(async () => { render(<App />) })
+  await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+  expect(screen.getByRole('status').textContent).toBe('Pending')
+  expect(screen.getByText('No execution attempts yet.')).toBeTruthy()
+  status = 'RUNNING'
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+  expect(screen.getByRole('status').textContent).toBe('Running')
+  expect(screen.getByRole('article', { name: 'Attempt 1' }).textContent).toContain('Running')
+  status = terminalStatus
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+  const expected = status === 'SUCCEEDED' ? '"sum": 10' : 'Invalid numbers'
+  expect(screen.getByRole('region', { name: 'Outcome' }).textContent).toContain(expected)
+  expect(screen.getByRole('article', { name: 'Attempt 1' }).textContent).toContain(expected)
+  const calls = fetchMock.mock.calls.length
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+  expect(fetchMock).toHaveBeenCalledTimes(calls)
+  expect(fetchMock.mock.calls.slice(1).map(([path]) => path)).toEqual(Array.from({ length: 3 }, () => ['/api/jobs/42', '/api/jobs/42/attempts?limit=10&offset=0']).flat())
+})
+
+test('pauses polling in a hidden tab, resumes when visible, and cancels on navigation', async () => {
+  vi.useFakeTimers()
+  localStorage.setItem(storageKey, token())
+  window.history.replaceState(null, '', '/jobs/42')
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => path === '/api/jobs/42'
+    ? response({ ...job, status: 'RUNNING', result: null }) : original(path, options))
+  await act(async () => { render(<App />) })
+  await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+  fireEvent(window, new Event('visibilitychange'))
+  const calls = fetchMock.mock.calls.length
+  await act(async () => { await vi.advanceTimersByTimeAsync(9000) })
+  expect(fetchMock).toHaveBeenCalledTimes(calls)
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  await act(async () => { fireEvent(window, new Event('visibilitychange')); await vi.advanceTimersByTimeAsync(3000) })
+  expect(fetchMock.mock.calls.length).toBeGreaterThan(calls)
+  let resolve!: (value: Response) => void
+  fetchMock.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+  const signal = fetchMock.mock.calls.at(-1)?.[1]?.signal
+  fireEvent.click(screen.getByRole('link', { name: 'Workers' }))
+  expect(signal?.aborted).toBe(true)
+  await act(async () => { resolve(response(job)); await vi.advanceTimersByTimeAsync(10) })
+  expect(window.location.pathname).toBe('/workers')
+  const afterNavigation = fetchMock.mock.calls.length
+  await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+  expect(fetchMock).toHaveBeenCalledTimes(afterNavigation)
+  vi.restoreAllMocks()
+})
+
+test('discards cached job data on logout before another account signs in', async () => {
+  await enterApp('/jobs/42')
+  await screen.findByRole('region', { name: 'Job overview' })
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+  await screen.findByRole('heading', { name: 'Sign in' })
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => path === '/api/users/me/'
+    ? response({ ...user, id: 888, username: 'another-user' }) : original(path, options))
+  fillLogin()
+  await screen.findByRole('heading', { name: 'Job unavailable' })
+  expect(screen.queryByRole('region', { name: 'Outcome' })).toBeNull()
+  expect(document.body.textContent).not.toContain('@demo-user (you)')
+})
+
+// Exercise the authenticated request boundary independently of feature screens.
 function SessionProbe() {
   const { user: currentUser, expired, login, logout, request } = useAuth()
   return <>
