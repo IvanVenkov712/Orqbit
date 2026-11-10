@@ -6,7 +6,11 @@ This guide records the recommended organization and visual design for Orqbit's f
 
 Use Node.js 22.12 or newer in the Node 22 release line and npm; the existing frontend Docker build uses Node 22. Install frontend dependencies independently of the backend and workers.
 
-Start the API on port 8000 using the [backend development guide](../../docs/development.md#running-the-api-locally). From the repository root, in another terminal:
+### Without Docker (PowerShell)
+
+**1. Start the backend.** Follow [Running the API locally](../../docs/development.md#running-the-api-locally) for Python/uv prerequisites, PostgreSQL database creation, `backend/.env`, migrations, and API startup on port 8000. Keep the API terminal running and confirm the readiness check succeeds before attempting login.
+
+**2. Start the frontend.** With Node.js/npm installed as described above, open a second PowerShell terminal at the repository root:
 
 ```powershell
 cd frontend
@@ -14,7 +18,13 @@ npm ci
 npm run dev
 ```
 
-Open Vite's printed URL. `vite.config.ts` forwards `/api/...` to `http://localhost:8000/...`, removing `/api`. If the backend port changes, the development proxy must match it. Use relative `/api` URLs in browser code.
+**3. Open the interface.** Use Vite's printed Local URL, usually `http://localhost:5173`, and choose Create an account. Register, then sign in with your username and password. Existing accounts can sign in directly. Jobs and Workers currently show labeled placeholders; their functional screens arrive in later roadmap steps. The session is held in memory, so refreshing the page requires login again. An independent worker is unnecessary for viewing the interface or signing in.
+
+Keep both terminals running while using the application. Press `Ctrl+C` in each to stop its development server; your PostgreSQL database retains accounts and jobs.
+
+`vite.config.ts` forwards `/api/...` to `http://localhost:8000/...`, removing `/api`. If the backend port changes, the development proxy must match it. Use relative `/api` URLs in browser code.
+
+### With Docker Compose
 
 For the existing container arrangement, first configure `.env.compose` using the [quickstart](../../docs/quickstart.md), then run from the repository root:
 

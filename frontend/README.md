@@ -12,6 +12,8 @@ The current UI is still the Vite starter. Routing, authentication, job and worke
 
 ## Local development
 
+For the complete setup without Docker, follow the [local frontend guide](docs/development.md#without-docker-powershell), starting with its linked PostgreSQL and backend instructions. It also covers opening the interface, registration, and login.
+
 Start the backend on port 8000 using the [backend development guide](../docs/development.md#running-the-api-locally). Then, from the repository root:
 
 ```powershell

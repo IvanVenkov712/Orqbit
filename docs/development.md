@@ -30,22 +30,38 @@ docs/                      Current status and proposed implementation design
 
 ## Running the API locally
 
-Use Python 3.13 and uv. Create a PostgreSQL database named `orqbit`, then run from the repository root:
+This setup runs without Docker. Install Python 3.13, uv, and PostgreSQL 18 locally. Start the PostgreSQL service on port 5432 and have your database user's password ready.
+
+Create the `orqbit` database once, using PostgreSQL's command-line tools on your PATH:
+
+```powershell
+psql -h localhost -p 5432 -U postgres -d postgres -c "CREATE DATABASE orqbit;"
+```
+
+Enter your PostgreSQL password when prompted. Substitute your own database user for `postgres` if needed. Alternatively, create the database in pgAdmin, owned by the user you will put in `DATABASE_URL`. Reuse an existing database by skipping creation; review the [migration considerations](#existing-databases) before upgrading existing data.
+
+In a PowerShell terminal, starting from the repository root:
 
 ```powershell
 cd backend
 uv sync --locked
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 uv run --locked python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Edit `backend/.env`: set `DATABASE_URL` to your local credentials and replace `SECRET_KEY=replace_with_secret_key` with the generated 64-character lowercase hexadecimal value. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES`. The settings also require positive `LEASE_SECONDS` and `PROTRACTION_SECONDS` values; lease and heartbeat behavior itself is not implemented. The real environment files are ignored by Git.
+Edit `backend/.env` before continuing:
+
+- Set `DATABASE_URL=postgresql+psycopg://postgres:YOUR_PASSWORD@localhost:5432/orqbit`, replacing the user and password with your local credentials. URL-encode reserved characters in the password.
+- Replace `SECRET_KEY=replace_with_secret_key` with the generated 64-character lowercase hexadecimal value. Keep an existing valid key when reusing your configuration.
+- Retain the other example settings: `LEASE_SECONDS=120`, `PROTRACTION_SECONDS=60`, `ALGORITHM=HS256`, and `ACCESS_TOKEN_EXPIRE_MINUTES=30`. The three timing settings must be positive; lease and heartbeat behavior itself is not implemented.
+
+The real environment files are ignored by Git.
 
 Continue running Python commands from `backend/`; run Docker Compose commands from the repository root. Apply migrations and start the API:
 
 ```powershell
 uv run --locked alembic upgrade head
-uv run --locked uvicorn main:app --app-dir src --reload
+uv run --locked uvicorn main:app --app-dir src --reload --port 8000
 ```
 
 If using an existing Windows virtual environment, the equivalent interpreter invocation is:
@@ -57,6 +73,14 @@ If using an existing Windows virtual environment, the equivalent interpreter inv
 `--app-dir src` is necessary for the current top-level imports. The reload flag is for local development. Run from `backend/` so settings find `backend/.env`. Configure your IDE to use `backend/.venv` as its interpreter environment and `backend/` as the API working directory. PostgreSQL stores database state; importing `main` does not create or alter tables.
 
 The API normally exposes interactive docs at `http://127.0.0.1:8000/docs` and its schema at `/openapi.json`. Register/log in a user for job and worker-management routes. Workers claim and report with their own API keys and report by attempt ID. See [API](api.md) for examples and [status](status.md) for verification limits.
+
+Keep the API terminal running. In a second PowerShell terminal, check database and schema readiness:
+
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:8000/health/ready
+```
+
+Expect `status: ready`. If the check fails, inspect the API terminal, PostgreSQL service, database credentials, and migration output. To open the browser interface, continue with the [frontend setup without Docker](../frontend/docs/development.md#without-docker-powershell); it covers Node.js/npm, starting Vite, registration, and login. Stop each development server with `Ctrl+C` in its terminal. PostgreSQL retains accounts and jobs.
 
 ## Job coordination
 
