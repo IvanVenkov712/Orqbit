@@ -281,6 +281,37 @@
   border-top: 1px solid var(--color-divider);
 }
 
+.tableContainer {
+  overflow-x: auto;
+}
+
+.jobsTable {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.jobsTable th,
+.jobsTable td {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.jobRow {
+  position: relative;
+}
+
+.jobRow:hover,
+.jobRow:focus-within {
+  background: var(--color-primary-soft);
+}
+
+.jobLink::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+}
+
 @media (max-width: 600px) {
   .headerInner {
     padding: var(--space-4);

@@ -15,6 +15,7 @@ import {
 import { ApiError, apiRequest } from './api/client'
 import { AuthProvider, useAuth } from './auth'
 import { JobDetailsPage } from './JobDetailsPage'
+import { JobsPage } from './JobsPage'
 import { ParameterEditor, readParameters } from './ParameterEditor'
 import type { Parameter } from './ParameterEditor'
 import orqbitIcon from './assets/orqbit-icon.svg'
@@ -37,7 +38,7 @@ function AppLayout() {
           </nav>
           <div className={styles.userArea} role="group" aria-label="Current user">
             {restoring ? <span>Checking session…</span> : restoreError ? <span>Session unavailable</span> : user ? <>
-              <span>{user.full_name || user.username} (@{user.username})</span>
+              <span>{user.full_name || user.username} ({user.username})</span>
               <button type="button" onClick={logout}>Sign out</button>
             </> : <>
               <span>Not signed in</span>
@@ -67,13 +68,7 @@ function Placeholder({ title, description }: { title: string; description: strin
         <p>{description}</p>
       </div>
       <section className={styles.placeholder} aria-label={`${title} placeholder`}>
-        <span className={styles.badge}>Planned screen</span>
-        <h2>This space is taking shape</h2>
-        <p>
-          This is a placeholder. {title} functionality will be added in a later
-          step of the frontend roadmap.
-        </p>
-        <p>You are signed in. This screen does not load live data yet.</p>
+        <p>Worker management is not available yet.</p>
         <div className={styles.actions}>
           {title === 'Jobs' && (
             <Link className={styles.primaryLink} to="/jobs/new">Submit a job</Link>
@@ -369,9 +364,10 @@ function App() {
           <Route element={<AppLayout />}>
             <Route index element={<Navigate to="/jobs" replace />} />
             <Route element={<RequireAuth />}>
-              <Route path="jobs" element={<Placeholder title="Jobs" description="A place to submit work and follow its outcome." />} />
+              <Route path="jobs" element={<JobsPage />} />
               <Route path="jobs/new" element={<SubmitJobPage />} />
               <Route path="jobs/:jobId" element={<JobDetailsPage />} />
+              <Route path="jobs/:jobId/attempts" element={<JobDetailsPage history />} />
               <Route path="workers" element={<Placeholder title="Workers" description="A place to register and inspect independent workers." />} />
               <Route path="workers/:workerId" element={<Placeholder title="Worker details" description="Inspect a worker's registration and supported job types." />} />
             </Route>

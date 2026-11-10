@@ -30,16 +30,17 @@ const statusLabels = {
 }
 const pageSize = 10
 
-export function JobDetailsPage() {
+export function JobDetailsPage({ history = false }: { history?: boolean }) {
   const { jobId = '' } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const { user, request } = useAuth()
   const validId = /^[1-9]\d*$/.test(jobId) && Number.isSafeInteger(Number(jobId))
   const rawOffset = searchParams.get('offset') ?? '0'
-  const offset = /^\d+$/.test(rawOffset) && Number.isSafeInteger(Number(rawOffset)) ? Number(rawOffset) : 0
+  const offset = history && /^\d+$/.test(rawOffset) && Number.isSafeInteger(Number(rawOffset)) ? Number(rawOffset) : 0
+  const limit = history ? pageSize : 1
 
   const details = useQuery({
-    queryKey: ['job-details', user?.id, jobId, offset],
+    queryKey: ['job-details', user?.id, jobId, limit, offset],
     enabled: validId && !!user,
     queryFn: async ({ signal }) => {
       const job = await request<Job>(`/jobs/${jobId}`, { signal })
@@ -48,7 +49,7 @@ export function JobDetailsPage() {
       let attempts: Attempt[] = []
       let attemptsError: string | null = null
       try {
-        attempts = await request<Attempt[]>(`/jobs/${jobId}/attempts?limit=${pageSize}&offset=${offset}`, { signal })
+        attempts = await request<Attempt[]>(`/jobs/${jobId}/attempts?limit=${limit}&offset=${offset}`, { signal })
       } catch (error) {
         signal.throwIfAborted()
         if (error instanceof ApiError && [401, 403, 404].includes(error.status ?? 0)) throw error
@@ -75,28 +76,26 @@ export function JobDetailsPage() {
 
   return <>
     <div className={styles.pageHeading}>
-      <p className={styles.eyebrow}>Your jobs</p>
-      <h1>Job details</h1>
-      <Link to="/jobs/new">Submit another job</Link>
+      <Link to="/jobs">Back to Jobs</Link>
+      <h1>{history ? 'Attempt history' : 'Job details'}</h1>
+      {history ? <Link to={`/jobs/${jobId}`}>Back to job</Link> : <Link to="/jobs/new">Submit another job</Link>}
     </div>
     {unavailable ? <section className={styles.placeholder}>
       <h2>Job unavailable</h2>
       <p>This job could not be found or is not one of your jobs. Check the link or sign in with the account that submitted it.</p>
-      <Link to="/jobs">Back to Jobs</Link>
     </section> : details.isError ? <section className={styles.placeholder}>
       <h2>Unable to load this job</h2>
       <p role="alert">{details.error instanceof ApiError ? details.error.message : 'Please try again.'}</p>
       <button type="button" onClick={() => { void details.refetch() }}>Try again</button>
     </section> : !job ? <p role="status">Loading job details…</p> : <div className={styles.jobDetails}>
-      <section className={styles.placeholder} aria-label="Job overview">
-        <h2>{job.job_type}</h2>
+      {!history && <><section className={styles.placeholder} aria-label="Job overview">
+        <h2>{job.job_type.replace(/[_-]+/g, ' ').replace(/^./, (letter) => letter.toUpperCase())} #{job.id}</h2>
         <p role="status">{statusLabels[job.status]}</p>
         <dl className={styles.metadata}>
           <div><dt>Job</dt><dd>#{job.id}</dd></div>
-          <div><dt>Creator</dt><dd>@{user?.username} (you)</dd></div>
+          <div><dt>Creator</dt><dd>{user?.username} (you)</dd></div>
           <div><dt>Type</dt><dd>{job.job_type}</dd></div>
         </dl>
-        {(job.status === 'PENDING' || job.status === 'RUNNING') && <p>Refreshes every 3 seconds while this page is visible.</p>}
       </section>
       <section className={styles.placeholder} aria-label="Parameters">
         <h2>Parameters</h2>
@@ -107,15 +106,15 @@ export function JobDetailsPage() {
         {job.result !== null && <><h3>Result</h3><pre className={styles.json}>{JSON.stringify(job.result, null, 2)}</pre></>}
         {job.error !== null && <><h3>Error</h3><pre className={styles.json}>{JSON.stringify(job.error, null, 2)}</pre></>}
         {job.result === null && job.error === null && <p>No outcome reported yet.</p>}
-      </section>
-      <section className={styles.placeholder} aria-label="Execution attempts">
-        <h2>Execution attempts</h2>
+      </section></>}
+      <section className={styles.placeholder} aria-label={history ? 'Execution attempts' : 'Latest attempt'}>
+        <h2>{history ? 'Execution attempts' : 'Latest attempt'}</h2>
         {attemptsError ? <>
           <p role="alert">{attemptsError}</p>
-          <button type="button" onClick={() => { void details.refetch() }}>Retry attempt history</button>
+          <button type="button" onClick={() => { void details.refetch() }}>Try again</button>
         </> : <>
           {attempts.length === 0 && <p>{offset ? 'No more execution attempts on this page.' : 'No execution attempts yet.'}</p>}
-          {attempts.map((attempt) => <article className={styles.attempt} key={attempt.id} aria-label={`Attempt ${attempt.attempt_number}`}>
+          {(history ? attempts : attempts.slice(0, 1)).map((attempt) => <article className={styles.attempt} key={attempt.id} aria-label={`Attempt ${attempt.attempt_number}`}>
             <h3>Attempt {attempt.attempt_number}</h3>
             <p>{statusLabels[attempt.status]}</p>
             <dl className={styles.metadata}>
@@ -126,10 +125,13 @@ export function JobDetailsPage() {
             {attempt.error !== null && <><h4>Error</h4><pre className={styles.json}>{JSON.stringify(attempt.error, null, 2)}</pre></>}
           </article>)}
         </>}
-        <nav className={styles.actions} aria-label="Attempt pages">
+        {!history && attempts.length > 0 && <div className={styles.actions}>
+          <Link className={styles.secondaryLink} to={`/jobs/${jobId}/attempts`}>View attempt history</Link>
+        </div>}
+        {history && <nav className={styles.actions} aria-label="Attempt pages">
           <button type="button" disabled={offset === 0 || details.isFetching} onClick={() => changePage(Math.max(0, offset - pageSize))}>Previous attempts</button>
           <button type="button" disabled={!!attemptsError || attempts.length < pageSize || details.isFetching} onClick={() => changePage(offset + pageSize)}>Next attempts</button>
-        </nav>
+        </nav>}
       </section>
     </div>}
   </>
