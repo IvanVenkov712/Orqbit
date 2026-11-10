@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="960" height="280" viewBox="0 0 960 280" role="img" aria-labelledby="title desc">
+  <title id="title">Orqbit logo</title>
+  <desc id="desc">A sleek orbit-shaped O with three processing nodes, followed by the Orqbit wordmark.</desc>
+  <defs>
+    <linearGradient id="orbit" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#55E3D1"/>
+      <stop offset="0.48" stop-color="#37B8EE"/>
+      <stop offset="1" stop-color="#7068F6"/>
+    </linearGradient>
+    <linearGradient id="node" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#A7FFF0"/>
+      <stop offset="1" stop-color="#4CCDE7"/>
+    </linearGradient>
+  </defs>
+  <!-- Orbital symbol: job flow and independent processing nodes -->
+  <g transform="translate(134 140)">
+    <circle r="77" fill="none" stroke="url(#orbit)" stroke-width="17"/>
+    <path d="M-95 36 C-47 79 53 88 105 21" fill="none" stroke="#101A35" stroke-width="19" stroke-linecap="round"/>
+    <path d="M-95 36 C-47 79 53 88 105 21" fill="none" stroke="url(#orbit)" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="-96" cy="36" r="13" fill="url(#node)" stroke="#101A35" stroke-width="5"/>
+    <circle cx="105" cy="21" r="13" fill="#8176FF" stroke="#101A35" stroke-width="5"/>
+    <circle cx="0" cy="0" r="20" fill="#101A35" stroke="url(#orbit)" stroke-width="7"/>
+    <circle cx="0" cy="0" r="5" fill="#B3FFF6"/>
+  </g>
+  <text x="262" y="180" fill="#F4F7FF" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="113" font-weight="750" letter-spacing="-5">Orqbit</text>
+</svg>
