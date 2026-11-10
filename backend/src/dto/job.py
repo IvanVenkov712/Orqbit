@@ -24,6 +24,18 @@ class JobCreate(BaseModel):
     permitted_user_ids: list[PositiveInt] = Field(default_factory=list)
     permitted_worker_ids: list[PositiveInt] = Field(default_factory=list)
 
+
+class JobSummaryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    job_type: str
+    status: JobStatus
+    created_at: datetime
+    updated_at: datetime
+
+
 class JobRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

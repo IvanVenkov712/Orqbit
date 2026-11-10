@@ -3,11 +3,11 @@ from typing import Annotated, Literal
 import fastapi
 from fastapi import Header, HTTPException, Query
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only
 
 import services
 from database import SessionDep
-from dto.job import JobCreate, JobRead
+from dto.job import JobCreate, JobRead, JobSummaryRead
 from dto.job_attempt import JobAttemptRead
 from models import JobAttempt
 from models.job import Job, JobStatus
@@ -38,7 +38,7 @@ def create_job(
     except InvalidJobPermissions as exc:
         raise HTTPException(422, str(exc)) from None
 
-@job_router.get("/jobs", response_model=list[JobRead])
+@job_router.get("/jobs", response_model=list[JobSummaryRead])
 def list_jobs(
     session: SessionDep,
     user: CurrentUser,
@@ -49,7 +49,16 @@ def list_jobs(
     offset: int = Query(0, ge=0),
     sort: Literal["status_updated"] | None = None,
 ):
-    stmt = accessible_user_jobs_query(user).options(selectinload(Job.attempts))
+    stmt = accessible_user_jobs_query(user).options(
+        load_only(
+            Job.id,
+            Job.user_id,
+            Job.job_type,
+            Job.status,
+            Job.created_at,
+            Job.updated_at,
+        )
+    )
 
     if owner_id is not None:
         stmt = stmt.where(Job.user_id == owner_id)

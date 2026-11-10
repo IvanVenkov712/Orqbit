@@ -29,7 +29,7 @@ Both discovery endpoints return only `id`, `username`, and `full_name`. They omi
 | Method | Route | Request | Response |
 | --- | --- | --- | --- |
 | POST | `/jobs/` | JSON: `job_type`, `params`, `permission_policy`; optional permitted-ID lists | Created job |
-| GET | `/jobs` | Optional `owner_id`, `status`, `job_type`, `limit`, `offset` query parameters | Accessible jobs, newest ID first |
+| GET | `/jobs` | Optional `owner_id`, `status`, `job_type`, `limit`, `offset`, `sort` query parameters | Accessible job summaries, newest ID first by default |
 | GET | `/jobs/{job_id}` | Job ID | Accessible job, or 404 |
 | GET | `/jobs/{job_id}/attempts` | Job ID; optional `limit`, `offset` | Execution attempts, highest attempt number first |
 
@@ -39,9 +39,11 @@ Submission also requires an `Idempotency-Key` header containing 1–100 characte
 
 Migration `4610066358ca` adds the required columns and uniqueness on `(user_id, idempotency_key)`. It preserves existing jobs by assigning each a synthetic key `legacy-job:<job_id>` and the fingerprint marker `legacy` before making both columns non-nullable. Original submission keys cannot be recovered, so historical jobs do not support submission replay. Future submissions must supply their own keys; the columns have no defaults.
 
-`GET /jobs` defaults to `limit=50`, `offset=0`; limit must be 1?100 and offset nonnegative. Filters are combined with permission checks. Attempts are batch-loaded for response serialization.
+`GET /jobs` defaults to `limit=50`, `offset=0`; limit must be 1?100 and offset nonnegative. Filters are combined with permission checks. The optional `sort=status_updated` orders by lifecycle status (`PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`), then descending update time and ID; other sort values return 422.
 
-A job response contains:
+The list returns a JSON array of `JobSummaryRead` objects containing only `id`, `user_id`, `job_type`, `status`, `created_at`, and `updated_at`. The database query fetches only these columns and does not load attempts. No matches or an offset beyond the results returns 200 with `[]`.
+
+**List response compatibility:** list items no longer include `params`, `result`, `error`, or `attempt_ids`. Clients needing those fields must use `GET /jobs/{job_id}`. Job submission and detail responses retain their full `JobRead` shape:
 
 | Field | Meaning |
 | --- | --- |
@@ -50,8 +52,9 @@ A job response contains:
 | `status` | `PENDING`, `RUNNING`, `SUCCEEDED`, or `FAILED` |
 | `result`, `error` | JSON objects or null |
 | `attempt_ids` | IDs of persisted attempts |
+| `created_at`, `updated_at` | UTC-aware creation and last-update timestamps in ISO 8601 format |
 
-Timestamps, permission policies, and permitted-ID lists are not currently included in job responses.
+Permission policies and permitted-ID lists are not currently included in job responses.
 
 ### Attempt history
 

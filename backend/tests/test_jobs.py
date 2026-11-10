@@ -1062,22 +1062,39 @@ def test_oversized_ids_return_422(
     }
 
 
-def test_list_jobs_loads_attempts_in_one_query(
-    client, database, user_headers, claim_worker
+@pytest.mark.parametrize("status", list(JobStatus))
+def test_list_jobs_returns_summaries_without_loading_payloads_or_attempts(
+    client, database, user_headers, claim_worker, status
 ):
     from database import engine
 
     worker, _ = claim_worker
+    params = {"input": "x" * 1000}
+    result = {"output": "y" * 1000} if status == JobStatus.SUCCEEDED else None
+    error = {"message": "z" * 1000} if status == JobStatus.FAILED else None
     with Session(database) as session:
         jobs = [
             Job(
                 job_type="example",
-                params={},
+                params=params,
                 user_id=worker.user_id,
-                status=JobStatus.RUNNING,
+                status=status,
+                result=result,
+                error=error,
                 idempotency_key=uuid4().hex,
                 request_fingerprint="test-fingerprint",
-                attempts=[JobAttempt(worker_id=worker.id, attempt_number=1, params={})],
+                attempts=[]
+                if status == JobStatus.PENDING
+                else [
+                    JobAttempt(
+                        worker_id=worker.id,
+                        attempt_number=1,
+                        params=params,
+                        status=AttemptStatus(status.value),
+                        result=result,
+                        error=error,
+                    )
+                ],
             )
             for _ in range(3)
         ]
@@ -1085,21 +1102,49 @@ def test_list_jobs_loads_attempts_in_one_query(
         session.commit()
         expected = {job.id: [attempt.id for attempt in job.attempts] for job in jobs}
 
-    attempt_queries = []
+    queries = []
 
-    def count_attempt_queries(connection, cursor, statement, parameters, context, many):
-        if "FROM job_attempts" in statement:
-            attempt_queries.append(statement)
+    def record_queries(connection, cursor, statement, parameters, context, many):
+        queries.append(statement)
 
-    event.listen(engine, "before_cursor_execute", count_attempt_queries)
+    event.listen(engine, "before_cursor_execute", record_queries)
     try:
         response = client.get("/jobs", headers=user_headers)
     finally:
-        event.remove(engine, "before_cursor_execute", count_attempt_queries)
+        event.remove(engine, "before_cursor_execute", record_queries)
 
     assert response.status_code == 200
-    assert {job["id"]: job["attempt_ids"] for job in response.json()} == expected
-    assert len(attempt_queries) == 1
+    summaries = response.json()
+    assert [job["id"] for job in summaries] == sorted(expected, reverse=True)
+    for summary in summaries:
+        assert set(summary) == {
+            "id",
+            "user_id",
+            "job_type",
+            "status",
+            "created_at",
+            "updated_at",
+        }
+        assert summary["user_id"] == worker.user_id
+        assert summary["job_type"] == "example"
+        assert summary["status"] == status.value
+        for field in ("created_at", "updated_at"):
+            assert datetime.fromisoformat(summary[field]).utcoffset() == timedelta(0)
+
+    job_queries = [statement for statement in queries if "FROM jobs" in statement]
+    assert len(job_queries) == 1
+    selected_columns = job_queries[0].split("FROM jobs", 1)[0]
+    for field in ("params", "result", "error"):
+        assert f"jobs.{field}" not in selected_columns
+    assert not any("FROM job_attempts" in statement for statement in queries)
+
+    job_id = summaries[0]["id"]
+    details = client.get(f"/jobs/{job_id}", headers=user_headers)
+    assert details.status_code == 200
+    assert details.json()["params"] == params
+    assert details.json()["result"] == result
+    assert details.json()["error"] == error
+    assert details.json()["attempt_ids"] == expected[job_id]
 
 
 @pytest.mark.parametrize(
