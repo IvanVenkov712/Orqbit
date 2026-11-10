@@ -18,6 +18,15 @@ class UserRead(UserBase):
 
     model_config = ConfigDict(from_attributes=True)
 
+
+class UserPublicRead(BaseModel):
+    id: int
+    username: str
+    full_name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class UserRegister(UserBase):
     password: str = Field(
         pattern=re.compile(

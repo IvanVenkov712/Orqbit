@@ -9,12 +9,20 @@ This page describes the current unversioned prototype. `/docs` and `/openapi.jso
 | POST | `/auth/register` | None | JSON: `username`, `email`, `full_name`, `password`; returns user metadata |
 | POST | `/auth/login` | None | Form fields: `username`, `password`; returns `access_token` and `token_type: "bearer"` |
 | GET | `/users/me/` | User bearer token | Returns the current active user's metadata |
+| GET | `/users` | User bearer token | Optional `query`, `limit`, `offset`; returns active users' public profiles |
+| GET | `/users/{user_id}` | User bearer token | Returns an active user's public profile, or 404 |
 
 User requests use `Authorization: Bearer <access_token>`. Worker claim/outcome requests use `X-API-Key: <worker-api-key>`. Creating or viewing workers uses a user token. No credentials are needed for health routes.
 
 Usernames and worker names contain 3?16 ASCII letters, digits, underscores, or hyphens. Email addresses are validated. Registration passwords contain 6?20 ASCII letters/digits or `@`, `$`, `#`, `%`, including at least one uppercase letter, lowercase letter, digit, and one of those symbols. User metadata contains `id`, `username`, `email`, `full_name`, `active`, and `role`; password hashes are not returned.
 
 Passwords are hashed with Argon2. Tokens use the configured signing key, algorithm, and expiry. Inactive users cannot log in or access user-protected routes. Worker authentication checks its API-key hash and the worker's active flag. The current API has no account-management, token-refresh, or key-rotation endpoints.
+
+### User discovery
+
+Any active authenticated user can discover other active users for access-policy selection. `GET /users` returns a JSON array ordered by descending ID, including the caller when applicable. The optional `query` is a case-insensitive, literal substring of the username (1–16 characters); `%` and `_` are not wildcards. Omit it to browse all active users. Filtering happens before pagination: `limit` defaults to 50 and must be 1–100; `offset` defaults to 0 and must be nonnegative. No matches or an offset beyond the results returns 200 with `[]`; invalid parameters return 422.
+
+Both discovery endpoints return only `id`, `username`, and `full_name`. They omit email, role, account status, and password hashes. `GET /users/{user_id}` returns 404, `User not found`, for missing or inactive users. `/users/me/` keeps its existing, fuller response for the signed-in user. Discovery does not grant access to a user's jobs or workers; existing permission policies still apply.
 
 ## Jobs
 
