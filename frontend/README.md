@@ -1,32 +1,25 @@
-# React + TypeScript + Vite
+# Orqbit frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The frontend is a React, TypeScript, and Vite application intended to become a small dashboard for submitting jobs, inspecting outcomes, and registering independent workers.
 
-Currently, two official plugins are available:
+The current UI is still the Vite starter. Routing, authentication, job and worker screens, and the recommended visual design are planned.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Guides
 
-## React Compiler
+- [Frontend roadmap](docs/roadmap.md): implementation order, acceptance criteria, and deferred features.
+- [Frontend development guide](docs/development.md): local setup, source organization, API integration, state, visual style, and verification.
+- [Backend API reference](../docs/api.md): current requests, responses, authentication, and permissions.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Local development
 
-## Expanding the Oxlint configuration
+Start the backend on port 8000 using the [backend development guide](../docs/development.md#running-the-api-locally). Then, from the repository root:
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```powershell
+cd frontend
+npm ci
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Open the URL printed by Vite. Browser requests to `/api` are forwarded to the backend with that prefix removed. The [development guide](docs/development.md#running-the-frontend) also describes the existing Docker Compose arrangement.
+
+From `frontend/`, run `npm run lint` for Oxlint and `npm run build` for TypeScript checking and the production build. No frontend test runner is configured yet.
