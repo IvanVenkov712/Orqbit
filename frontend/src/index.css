@@ -1,13 +1,13 @@
 :root {
-  --color-background: #f8fafc;
+  --color-background: #f5f8fc;
   --color-surface: #ffffff;
-  --color-text: #0f172a;
-  --color-text-secondary: #475569;
-  --color-divider: #e2e8f0;
-  --color-primary: #4f46e5;
-  --color-primary-hover: #4338ca;
-  --color-primary-soft: #eef2ff;
-  --color-input-border: #64748b;
+  --color-text: #101a35;
+  --color-text-secondary: #4c5c75;
+  --color-divider: #dce5ef;
+  --color-primary: #0f6f78;
+  --color-primary-hover: #0c5961;
+  --color-primary-soft: #e9faf7;
+  --color-input-border: #64758b;
   --font-sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, Consolas, monospace;
   --space-1: 4px;

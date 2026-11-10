@@ -13,6 +13,7 @@ import {
 } from 'react-router'
 import { ApiError, apiRequest } from './api/client'
 import { AuthProvider, useAuth } from './auth'
+import orqbitIcon from './assets/orqbit-icon.svg'
 import styles from './App.module.css'
 
 function AppLayout() {
@@ -23,7 +24,7 @@ function AppLayout() {
       <header className={styles.header}>
         <div className={styles.headerInner}>
           <Link className={styles.brand} to="/jobs" aria-label="Orqbit home">
-            <img src="/favicon.svg" alt="" width="32" height="32" />
+            <img src={orqbitIcon} alt="" width="36" height="36" />
             Orqbit
           </Link>
           <nav className={styles.navigation} aria-label="Main navigation">
@@ -141,6 +142,7 @@ function AuthPage({ register = false }: { register?: boolean }) {
 
   return (
     <section className={styles.authPanel}>
+      <img className={styles.authIcon} src={orqbitIcon} alt="" width="56" height="56" />
       <p className={styles.eyebrow}>Your Orqbit workspace</p>
       <h1>{register ? 'Create an account' : 'Sign in'}</h1>
       <p>{register ? 'Register an account, then sign in to your workspace.' : 'Sign in with your username to access Jobs and Workers.'}</p>
@@ -183,7 +185,6 @@ function AuthPage({ register = false }: { register?: boolean }) {
           <button type="submit">{submitting ? (register ? 'Creating account…' : 'Signing in…') : (register ? 'Create account' : 'Sign in')}</button>
         </fieldset>
       </form>
-      <p className={styles.authNote}>Your session stays in memory. Refreshing this page requires signing in again.</p>
       <Link to={register ? '/login' : '/register'} state={{ from }}>
         {register ? 'Already have an account? Sign in' : 'Create an account'}
       </Link>

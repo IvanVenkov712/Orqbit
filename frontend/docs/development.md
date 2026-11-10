@@ -130,7 +130,7 @@ Configure query freshness, interval polling, and retries deliberately. Avoid ret
 
 ## Visual design
 
-Use a calm, technical dashboard with light surfaces, slate text, indigo actions, compact tables, and restrained decoration. A dark developer-console theme or a denser industrial style could be considered later; begin with the light operational style.
+Use a calm, technical dashboard with light surfaces, navy text, teal actions, compact tables, and restrained decoration. Use the supplied Orqbit icon for application branding and the favicon. The palette follows its navy and aqua colors, with darker teal for readable controls. A dark developer-console theme or a denser industrial style could be considered later; begin with the light operational style.
 
 ### Palette and typography
 
@@ -138,13 +138,13 @@ Define CSS custom properties in `index.css`, then use CSS Modules beside compone
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `--color-background` | `#F8FAFC` | Page background |
+| `--color-background` | `#F5F8FC` | Page background |
 | `--color-surface` | `#FFFFFF` | Panels and inputs |
-| `--color-text` | `#0F172A` | Primary text |
-| `--color-text-secondary` | `#475569` | Supporting text |
-| `--color-divider` | `#E2E8F0` | Subtle content separators |
-| `--color-primary` | `#4F46E5` | Main actions and focus indication |
-| `--color-input-border` | `#64748B` | Visible control boundaries |
+| `--color-text` | `#101A35` | Primary text |
+| `--color-text-secondary` | `#4C5C75` | Supporting text |
+| `--color-divider` | `#DCE5EF` | Subtle content separators |
+| `--color-primary` | `#0F6F78` | Main actions and focus indication |
+| `--color-input-border` | `#64758B` | Visible control boundaries |
 
 Use a system sans-serif stack for normal text and a system monospace stack for job types, IDs, and JSON. Start with 16px body text, 14px table text, and 24-28px page headings. Use spacing steps of 4, 8, 12, 16, 24, and 32px, and modest 6-8px corner radii. Centralize these values as variables rather than repeating arbitrary values.
 
@@ -152,7 +152,7 @@ Use a system sans-serif stack for normal text and a system monospace stack for j
 
 - Tables use clear column headings, horizontal separators, subtle row hover, and explicit detail links. Preserve readable columns at narrow widths with contained scrolling where necessary.
 - Forms use labels above controls, concise help text, inline validation errors, and a visible submitting state. Start JSON entry with a normal textarea; a code editor is not required.
-- Primary buttons use solid indigo with contrasting text. Secondary actions use outlined or plain treatments. Keep destructive styling reserved for actual destructive operations when supported.
+- Primary buttons use solid teal with contrasting text. Secondary actions use outlined or plain treatments. Keep destructive styling reserved for actual destructive operations when supported.
 - JSON panels use a pale background, preserved indentation, monospace text, scrolling for large content, and a copy action with feedback. Render JSON as text rather than injecting HTML.
 - Status badges include text: slate for `PENDING`, blue for `RUNNING`, green for `SUCCEEDED`, and red for `FAILED`. An attempt may also expose `LOST`; keep it visibly distinct and labeled without implying automated crash detection exists.
 - Use visible keyboard focus, associated form labels, semantic tables, and accessible copy/error feedback. Color must be accompanied by text or another cue.

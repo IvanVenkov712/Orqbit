@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import App from './App'
 import { AuthProvider, useAuth } from './auth'
+import orqbitIcon from './assets/orqbit-icon.svg'
 
 const user = { id: 7, username: 'demo-user', email: 'demo@example.com', full_name: 'Demo User', active: true, role: 'REGULAR' }
 const fetchMock = vi.fn<typeof fetch>()
@@ -60,6 +61,15 @@ test('requires login by default and shows the signed-out user area', () => {
   expect(window.location.pathname).toBe('/login')
   expect(screen.getByRole('group', { name: 'Current user' }).textContent).toContain('Not signed in')
   expect(fetchMock).not.toHaveBeenCalled()
+})
+
+test.each(['/login', '/register'])('uses the Orqbit icon on %s without session implementation text', (path) => {
+  window.history.replaceState(null, '', path)
+  render(<App />)
+  const brandIcon = screen.getByRole('link', { name: 'Orqbit home' }).querySelector('img')
+  expect(brandIcon?.getAttribute('src')).toBe(orqbitIcon)
+  expect(document.querySelector('main img')?.getAttribute('src')).toBe(brandIcon?.getAttribute('src'))
+  expect(screen.queryByText(/Your session stays in memory/)).toBeNull()
 })
 
 test.each(['/jobs', '/jobs/new', '/jobs/42', '/workers', '/workers/17'])(
