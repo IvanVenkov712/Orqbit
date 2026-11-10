@@ -34,12 +34,13 @@ For example, the included `add_numbers` worker turns `{"numbers":[2,3,5]}` into 
 ## Features
 
 - **Job submission and tracking.** Submit typed jobs with JSON parameters and retrieve their status, results, errors, and execution attempt IDs.
+- **Idempotent submission.** Creator-scoped submission keys return the existing job for matching requests and reject conflicting reuse.
 - **Capability-based dispatch.** Workers declare the job types they support and pull compatible work when ready.
 - **Concurrent claiming.** Atomic claims coordinate access to pending jobs so competing workers do not receive the same job simultaneously.
-- **Owned outcome reporting.** Only the worker assigned to an attempt can report its success or failure.
+- **Owned outcome reporting.** Only the worker assigned to an attempt can report its success or failure; exact replays of accepted reports are safe.
 - **Authentication and access policies.** User authentication, individual worker API keys, and permission-aware access control who can view or claim work.
 - **Searchable job and worker lists.** Filter and paginate records to find relevant work and registered workers.
-- **Persistent execution records.** PostgreSQL stores job parameters, attempt ownership, timestamps, and outcomes.
+- **Persistent execution records.** PostgreSQL stores job parameters, attempt ownership, timestamps, and outcomes. An authorized, paginated history endpoint exposes attempt details.
 - **An independent example worker.** A runnable application with its own dependencies, configuration, and tests shows how to integrate through the public API.
 
 ## What this approach offers
@@ -64,7 +65,6 @@ The next areas of development build on the existing submission, claiming, and re
 
 - **Worker heartbeats and execution leases** to detect abandoned work and support recovery after worker failures.
 - **Retry policies with backoff** to handle transient failures with explicit attempt limits.
-- **Detailed attempt history** to make previous executions and their outcomes available through the API.
 - **Operational visibility** through metrics, structured logs, and tools for diagnosing stalled or failed work.
 - **Additional job controls and integrations**, such as cancellation, scheduling, priorities, and completion webhooks, as their requirements take shape.
 

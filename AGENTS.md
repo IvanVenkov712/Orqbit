@@ -37,7 +37,7 @@ solution with extra machinery.
 - **Language:** Python.
 - **API:** FastAPI.
 - **Persistence:** PostgreSQL with SQLAlchemy 2.x ORM.
-- **Schema migrations:** Alembic, when migrations are introduced.
+- **Schema migrations:** Alembic.
 - **Validation:** Pydantic models for API input/output.
 - **Workers:** independent processes/services that interact with Orqbit through the API.
 - **Job dispatch:** pull-based; workers ask for compatible pending jobs.
@@ -132,7 +132,7 @@ For each behavior change, add or update focused tests. Prioritize:
 - Empty-queue behavior.
 - Successful and failed completion.
 - Rejection of invalid state transitions.
-- Worker ownership validation, once implemented.
+- Worker ownership validation.
 - Concurrent claims: two workers must **never receive the same job simultaneously**.
 - Persistence and transaction rollback behavior.
 
@@ -165,6 +165,6 @@ Before finishing a change, run the relevant tests, formatters, and linters **if 
 
 ## Future evolution
 
-Add capabilities when they solve demonstrated problems. Likely follow-on milestones include atomic concurrent claiming, worker ownership, crash recovery via leases/heartbeats, retries with backoff, authentication, observability, and optional client notifications. Revisit external message brokers or event-driven components only if PostgreSQL-backed coordination is no longer appropriate for stated requirements.
+Add capabilities when they solve demonstrated problems. Likely follow-on milestones include crash recovery via leases/heartbeats, retries with backoff, observability, and optional client notifications. Revisit external message brokers or event-driven components only if PostgreSQL-backed coordination is no longer appropriate for stated requirements.
 
 **Guiding principle:** Make Orqbit a small, correct, understandable asynchronous job platform before trying to make it a distributed systems framework.

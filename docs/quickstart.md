@@ -80,13 +80,17 @@ Registration is needed once per database. If the account already exists, log in 
 ## 4. Create and read a private job
 
 ```powershell
-$job = Invoke-RestMethod -Method Post -Uri "$api/jobs/" -Headers $headers -ContentType application/json -Body '{"job_type":"example","params":{"hello":"world","values":[true,null,3]},"permission_policy":"PRIVATE"}'
+$submissionHeaders = @{
+    Authorization = $headers.Authorization
+    "Idempotency-Key" = [guid]::NewGuid().ToString()
+}
+$job = Invoke-RestMethod -Method Post -Uri "$api/jobs/" -Headers $submissionHeaders -ContentType application/json -Body '{"job_type":"example","params":{"hello":"world","values":[true,null,3]},"permission_policy":"PRIVATE"}'
 $before = Invoke-RestMethod -Uri "$api/jobs/$($job.id)" -Headers $headers
 $expected = $before | ConvertTo-Json -Depth 20 -Compress
 $before
 ```
 
-The response includes the job ID, authenticated `user_id`, submitted parameters, `PENDING` status, null result/error, and empty `attempt_ids`. No worker executes it in this demonstration. To register a worker and exercise claiming/reporting, see the [API workflow](api.md#worker-workflow).
+The response includes the job ID, authenticated `user_id`, submitted parameters, `PENDING` status, null result/error, and empty `attempt_ids`. Reuse `$submissionHeaders` with the same body to retry this submission; generate a new key for a new job. Reusing a key with changed content returns 409. No worker executes it in this demonstration. To register a worker and exercise claiming/reporting, see the [API workflow](api.md#worker-workflow).
 
 ## 5. Recreate containers and verify persistence
 

@@ -11,7 +11,7 @@ backend/
     health.py              Read-only database/schema readiness checks
     models/                Jobs, users, workers, permissions, attempts, and timestamps
     dto/                   Pydantic requests and responses
-    services/              Authentication and job-access rules
+    services/              Authentication, access rules, submission, and job lifecycle operations
     api/routers/           Auth, user, job, worker, claim/outcome, and health routes
   Dockerfile               Python 3.13 API/migration image with locked runtime dependencies
   .dockerignore            Allowlist of files needed to build the image
@@ -60,7 +60,7 @@ The API normally exposes interactive docs at `http://127.0.0.1:8000/docs` and it
 
 ## Job coordination
 
-Workers authenticate with `X-API-Key` and claim without a request body; their supported job types are registered on the server. A claim returns an execution attempt, and the worker reports its outcome by that attempt's ID. Clients can read job status, result/error, and attempt IDs through the API. The [example worker guide](example-worker.md) walks through this flow.
+Clients submit with a required creator-scoped `Idempotency-Key`; matching retries return the existing job, and changed content returns 409. Workers authenticate with `X-API-Key` and claim without a request body; their supported job types are registered on the server. A claim returns an execution attempt, and the worker reports its outcome by that attempt's ID. Clients can read job status, result/error, and attempt IDs, then fetch paginated attempt details from `GET /jobs/{job_id}/attempts`. The [example worker guide](example-worker.md) walks through this flow.
 
 Claims use a PostgreSQL transaction with `FOR UPDATE SKIP LOCKED`; claiming creates an attempt and marks the job running in that transaction. Outcome reports lock the attempt, check worker ownership, and update job and attempt together for a running attempt. An exact replay of an accepted outcome is also supported; see the [API reference](api.md) for replay and conflict rules. These operations coordinate work; the API does not execute worker handlers.
 
@@ -71,6 +71,8 @@ Heartbeats, lease recovery, and retries remain planned. A crashed worker can lea
 Migrations run explicitly, never through `create_all()` at app import. Upgrade with `uv run --locked alembic upgrade head` from `backend/`, or use the Compose migration command below.
 
 Migration `476550d0c277` adds users, workers, permissions, and attempts. It refuses to upgrade legacy `RUNNING` jobs because worker ownership cannot be reconstructed; resolve those jobs deliberately before upgrading. Other legacy jobs retain their values and become private jobs owned by an inactive `__legacy_jobs__` account. Reassign them explicitly before use; no ownership-transfer endpoint is implemented. These migration behaviors are covered by PostgreSQL integration tests.
+
+Migration `4610066358ca` adds required submission keys and request fingerprints, unique per creator and key. Existing jobs receive synthetic `legacy-job:<job_id>` keys and a `legacy` fingerprint marker; they retain their data but cannot replay their original submissions. See the [API reference](api.md#jobs) for the current submission contract.
 
 ## PostgreSQL integration tests
 
