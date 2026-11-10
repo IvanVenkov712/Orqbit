@@ -17,7 +17,7 @@ import orqbitIcon from './assets/orqbit-icon.svg'
 import styles from './App.module.css'
 
 function AppLayout() {
-  const { user, logout } = useAuth()
+  const { user, logout, restoring, restoreError } = useAuth()
   return (
     <div className={styles.app}>
       <a className={styles.skipLink} href="#main-content">Skip to content</a>
@@ -32,7 +32,7 @@ function AppLayout() {
             <NavLink to="/workers">Workers</NavLink>
           </nav>
           <div className={styles.userArea} role="group" aria-label="Current user">
-            {user ? <>
+            {restoring ? <span>Checking session…</span> : restoreError ? <span>Session unavailable</span> : user ? <>
               <span>{user.full_name || user.username} (@{user.username})</span>
               <button type="button" onClick={logout}>Sign out</button>
             </> : <>
@@ -83,14 +83,31 @@ function Placeholder({ title, description }: { title: string; description: strin
   )
 }
 
+function SessionStatus() {
+  const { restoreError, restore, logout } = useAuth()
+  return (
+    <section className={styles.placeholder}>
+      {restoreError ? <>
+        <h1>Unable to open your workspace</h1>
+        <p role="alert">{restoreError.message}</p>
+        <button type="button" onClick={() => { void restore() }}>Try again</button>
+      </> : <p role="status">Restoring your session…</p>}
+      <div className={styles.actions}>
+        <button type="button" onClick={logout}>Sign out</button>
+      </div>
+    </section>
+  )
+}
+
 function RequireAuth() {
-  const { user } = useAuth()
+  const { user, restoring, restoreError } = useAuth()
   const location = useLocation()
+  if (restoring || restoreError) return <SessionStatus />
   return user ? <Outlet /> : <Navigate to="/login" replace state={{ from: location.pathname + location.search + location.hash }} />
 }
 
 function AuthPage({ register = false }: { register?: boolean }) {
-  const { user, login, expired } = useAuth()
+  const { user, login, expired, restoring, restoreError } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
   const [error, setError] = useState<ApiError | null>(null)
@@ -101,6 +118,7 @@ function AuthPage({ register = false }: { register?: boolean }) {
   // Only return to a local application route, never an arbitrary redirect URL.
   const from = location.state?.from
   const destination = typeof from === 'string' && /^\/(jobs|workers)(\/|\?|#|$)/.test(from) ? from : '/jobs'
+  if (restoring || restoreError) return <SessionStatus />
   if (user) return <Navigate to={destination} replace />
 
   async function submit(event: FormEvent<HTMLFormElement>) {

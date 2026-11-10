@@ -1,12 +1,14 @@
 ﻿// @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { StrictMode } from 'react'
 import App from './App'
 import { AuthProvider, useAuth } from './auth'
 import orqbitIcon from './assets/orqbit-icon.svg'
 
 const user = { id: 7, username: 'demo-user', email: 'demo@example.com', full_name: 'Demo User', active: true, role: 'REGULAR' }
 const fetchMock = vi.fn<typeof fetch>()
+const storageKey = 'orqbit.access_token'
 
 function token(expiresAt = Date.now() + 30 * 60_000) {
   return `header.${btoa(JSON.stringify({ sub: user.username, exp: Math.floor(expiresAt / 1000) }))}.signature`
@@ -17,6 +19,8 @@ function response(body: unknown, status = 200) {
 }
 
 beforeEach(() => {
+  localStorage.clear()
+  sessionStorage.clear()
   window.history.replaceState(null, '', '/')
   fetchMock.mockReset()
   fetchMock.mockImplementation(async (path) => {
@@ -95,7 +99,8 @@ test('logs in with form data, loads the current user, and restores the requested
   expect(new Headers(loginOptions?.headers).get('Content-Type')).toContain('application/x-www-form-urlencoded')
   expect(fetchMock.mock.calls[1][0]).toBe('/api/users/me/')
   expect(new Headers(fetchMock.mock.calls[1][1]?.headers).get('Authorization')).toBe(`Bearer ${accessToken}`)
-  expect(window.localStorage.length).toBe(0)
+  expect(window.localStorage.length).toBe(1)
+  expect(window.localStorage.getItem(storageKey)).toBe(accessToken)
   expect(window.sessionStorage.length).toBe(0)
 })
 
@@ -179,17 +184,103 @@ test('signs out and prevents browser back from reopening a protected screen', as
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
   expect(await screen.findByRole('heading', { level: 1, name: 'Sign in' })).toBeTruthy()
   expect(screen.queryByText('Demo User (@demo-user)')).toBeNull()
+  expect(localStorage.getItem(storageKey)).toBeNull()
   await act(async () => { window.history.back() })
   await waitFor(() => expect(window.location.pathname).toBe('/login'))
   expect(screen.queryByText('Planned screen')).toBeNull()
 })
 
-test('requires login again after remounting the application (page refresh)', async () => {
-  await enterApp()
+test('preserves login and the requested URL after a page reload while validating the current user', async () => {
+  const path = '/workers/17?view=details#registration'
+  await enterApp(path)
+  const accessToken = localStorage.getItem(storageKey)
+  cleanup()
+  let resolve!: (value: Response) => void
+  fetchMock.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+  render(<App />)
+  expect(screen.getByRole('status').textContent).toBe('Restoring your session…')
+  expect(screen.queryByRole('heading', { level: 1, name: 'Sign in' })).toBeNull()
+  expect(screen.queryByText('Planned screen')).toBeNull()
+  expect(window.location.pathname + window.location.search + window.location.hash).toBe(path)
+  expect(fetchMock.mock.calls[2][0]).toBe('/api/users/me/')
+  expect(new Headers(fetchMock.mock.calls[2][1]?.headers).get('Authorization')).toBe(`Bearer ${accessToken}`)
+  await act(async () => { resolve(response({ ...user, full_name: 'Updated Name' })) })
+  expect(await screen.findByRole('heading', { level: 1, name: 'Worker details' })).toBeTruthy()
+  expect(screen.getByRole('group', { name: 'Current user' }).textContent).toContain('Updated Name')
+  expect(fetchMock).toHaveBeenCalledTimes(3)
+  expect(localStorage.getItem(storageKey)).toBe(accessToken)
+})
+
+test.each([401, 403])('clears a stored token rejected by current-user validation with HTTP %s', async (status) => {
+  localStorage.setItem(storageKey, token())
+  fetchMock.mockResolvedValueOnce(response({ detail: 'Credentials rejected' }, status))
+  window.history.replaceState(null, '', '/jobs/42')
+  render(<App />)
+  expect(await screen.findByRole('heading', { level: 1, name: 'Sign in' })).toBeTruthy()
+  expect(screen.getByRole('status').textContent).toContain('Your session has expired')
+  expect(localStorage.getItem(storageKey)).toBeNull()
+  expect(screen.queryByText('Planned screen')).toBeNull()
+})
+
+test.each(['malformed-token', token(Date.now() - 60_000)])('clears an invalid or expired stored token without sending it to the API', (accessToken) => {
+  localStorage.setItem(storageKey, accessToken)
+  render(<App />)
+  expect(screen.getByRole('heading', { level: 1, name: 'Sign in' })).toBeTruthy()
+  expect(localStorage.getItem(storageKey)).toBeNull()
+  expect(fetchMock).not.toHaveBeenCalled()
+})
+
+test.each(['network', 'server'])('keeps the stored token on a %s restoration failure and offers retry', async (failure) => {
+  const accessToken = token()
+  localStorage.setItem(storageKey, accessToken)
+  if (failure === 'network') fetchMock.mockRejectedValueOnce(new Error('Private diagnostics'))
+  else fetchMock.mockResolvedValueOnce(response({ detail: 'Internal diagnostics' }, 503))
+  window.history.replaceState(null, '', '/workers/17')
+  render(<App />)
+  expect(await screen.findByRole('alert')).toBeTruthy()
+  expect(localStorage.getItem(storageKey)).toBe(accessToken)
+  expect(window.location.pathname).toBe('/workers/17')
+  expect(screen.queryByRole('heading', { level: 1, name: 'Sign in' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(await screen.findByRole('heading', { level: 1, name: 'Worker details' })).toBeTruthy()
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+  expect(fetchMock.mock.calls.every(([path]) => path === '/api/users/me/')).toBe(true)
+})
+
+test('logout during restoration cancels the request and prevents a late response restoring the session', async () => {
+  localStorage.setItem(storageKey, token())
+  let resolve!: (value: Response) => void
+  fetchMock.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+  render(<App />)
+  const signal = fetchMock.mock.calls[0][1]?.signal
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+  expect(signal?.aborted).toBe(true)
+  expect(localStorage.getItem(storageKey)).toBeNull()
+  await act(async () => { resolve(response(user)) })
+  expect(screen.getByRole('heading', { level: 1, name: 'Sign in' })).toBeTruthy()
   cleanup()
   render(<App />)
   expect(screen.getByRole('heading', { level: 1, name: 'Sign in' })).toBeTruthy()
-  expect(fetchMock).toHaveBeenCalledTimes(2)
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+})
+
+test('restores a saved session in React StrictMode despite its initial effect cleanup', async () => {
+  localStorage.setItem(storageKey, token())
+  window.history.replaceState(null, '', '/jobs')
+  render(<StrictMode><App /></StrictMode>)
+  expect(await screen.findByRole('heading', { level: 1, name: 'Jobs' })).toBeTruthy()
+  expect(localStorage.getItem(storageKey)).not.toBeNull()
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+test('removes a restored session when its original token expires', async () => {
+  vi.useFakeTimers()
+  localStorage.setItem(storageKey, token(Date.now() + 60_000))
+  await act(async () => { render(<App />) })
+  expect(screen.getByRole('heading', { level: 1, name: 'Jobs' })).toBeTruthy()
+  await act(async () => { vi.advanceTimersByTime(60_000) })
+  expect(screen.getByRole('heading', { level: 1, name: 'Sign in' })).toBeTruthy()
+  expect(localStorage.getItem(storageKey)).toBeNull()
 })
 
 test('automatically removes an expired session and allows signing in again', async () => {
@@ -202,6 +293,7 @@ test('automatically removes an expired session and allows signing in again', asy
   expect(screen.getByRole('heading', { level: 1, name: 'Sign in' })).toBeTruthy()
   expect(screen.getByRole('status').textContent).toContain('Your session has expired')
   expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull()
+  expect(localStorage.getItem(storageKey)).toBeNull()
   await act(async () => { fillLogin() })
   expect(screen.getByRole('heading', { level: 1, name: 'Jobs' })).toBeTruthy()
 })
@@ -309,6 +401,7 @@ test('authenticated requests attach the token and remove the session on a backen
   fetchMock.mockResolvedValueOnce(response({ detail: 'Could not validate credentials' }, 401))
   fireEvent.click(screen.getByRole('button', { name: 'Load data' }))
   expect(await screen.findByText('Expired')).toBeTruthy()
+  expect(localStorage.getItem(storageKey)).toBeNull()
   expect(new Headers(fetchMock.mock.calls[2][1]?.headers).get('Authorization')).toMatch(/^Bearer /)
   expect(fetchMock.mock.calls[2][1]?.signal?.aborted).toBe(true)
 })

@@ -18,7 +18,7 @@ npm ci
 npm run dev
 ```
 
-**3. Open the interface.** Use Vite's printed Local URL, usually `http://localhost:5173`, and choose Create an account. Register, then sign in with your username and password. Existing accounts can sign in directly. Jobs and Workers currently show labeled placeholders; their functional screens arrive in later roadmap steps. The session is held in memory, so refreshing the page requires login again. An independent worker is unnecessary for viewing the interface or signing in.
+**3. Open the interface.** Use Vite's printed Local URL, usually `http://localhost:5173`, and choose Create an account. Register, then sign in with your username and password. Existing accounts can sign in directly. Jobs and Workers currently show labeled placeholders; their functional screens arrive in later roadmap steps. Reloading the page preserves login until the token expires or you sign out. An independent worker is unnecessary for viewing the interface or signing in.
 
 Keep both terminals running while using the application. Press `Ctrl+C` in each to stop its development server; your PostgreSQL database retains accounts and jobs.
 
@@ -110,7 +110,7 @@ Use `Authorization: Bearer <access_token>` for user-protected requests. Worker `
 
 The shared client should support both form and JSON requests, check HTTP status, and translate string `detail` errors and FastAPI field-validation arrays into useful messages. Show network failures separately from invalid input. Missing and inaccessible records both return 404; do not reveal or infer which case applies. Current creation routes return 200.
 
-Start with the token and user in memory. A page refresh requires login again. There is no refresh endpoint or server-side logout operation; logout clears the browser session. On session expiry, cancel user-specific requests and clear cached records before returning to login. Keep caches isolated between users. Registration returns user metadata, so it does not itself establish a logged-in session.
+Persist only the access token in local storage, keeping passwords and current-user details out of browser persistence. Page reloads preserve login: validate the saved token's expiry, then load `/users/me/` before opening protected screens. Remove the saved token on expiry, logout, or authentication rejection; preserve it on network/server failures and offer a restoration retry. There is no token-refresh endpoint or server-side logout operation. On session expiry, cancel user-specific requests and clear cached records when caching is introduced. Keep caches isolated between users. Registration returns user metadata, so it does not itself establish a logged-in session.
 
 ### Submission and credentials
 

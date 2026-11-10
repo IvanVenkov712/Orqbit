@@ -6,7 +6,7 @@ Build a small operational dashboard around Orqbit's existing public HTTP API. Pr
 
 The frontend contains a React/TypeScript application shell with React Router, a light responsive layout, Jobs/Workers navigation, login and registration forms, a current-user area with logout, and protected application routes with explicitly labeled feature placeholders. Vite and Nginx proxy `/api` to the backend. Docker Compose includes a frontend service on port 8080.
 
-Steps 1–3 are implemented; steps 4–9 remain planned. Vitest, jsdom, and React Testing Library provide focused tests through `npm test`. Shared HTTP transport and in-memory authentication are available; job/worker API integration, feature screens, and TanStack Query are not implemented yet.
+Steps 1–3 are implemented; steps 4–9 remain planned. Vitest, jsdom, and React Testing Library provide focused tests through `npm test`. Shared HTTP transport and persistent token authentication are available; job/worker API integration, feature screens, and TanStack Query are not implemented yet.
 
 Treat each milestone as a separate change, splitting it further when necessary. Prefer changes to one to three files; explain additional files when directly necessary. Add dependencies only when their behavior is introduced. Each behavior change should include focused verification, rather than postponing testing until the final milestone.
 
@@ -36,13 +36,13 @@ Add `src/api/client.ts` for `/api` requests, bearer authentication, response par
 
 Implement login, load the current user through `/users/me/`, and protect application routes. Add a small authentication context, logout, and handling for expired credentials. Then add registration and direct successful registrants to login.
 
-Start with an in-memory session: refreshing the page requires login again. The backend has no token-refresh endpoint. Clear user-specific cached data on logout or session expiry when caching is introduced.
+Persist the access token so page reloads preserve login until the token expires. Restore the current user through `/users/me/` before opening protected screens. The backend has no token-refresh endpoint. Clear user-specific cached data on logout or session expiry when caching is introduced.
 
 **Done when:** valid credentials enter the application, incorrect credentials show a useful error, protected routes require authentication, and logout/expiry removes the session. Registration displays backend validation and duplicate-account errors.
 
 **Implemented:** `/login` sends form-encoded credentials to `/auth/login`, then loads `/users/me/` with the bearer token before opening the application. `/register` sends JSON account fields to `/auth/register`, displays backend field-validation and duplicate-account errors, and directs successful registrants to login. Both forms provide labels, required fields, submission feedback, and cancellation when leaving the form. Jobs and Workers routes require authentication; login returns to the requested application URL, including its query and fragment. The header shows the current user's name and username with a Sign out action.
 
-`src/auth.tsx` keeps the token and current user in memory, with no browser persistence. Logout and JWT expiry remove the session and abort authenticated requests; expiry is also checked when the window regains focus or visibility. Future feature calls should use `useAuth().request`, which supplies the bearer token and clears the session on a backend 401. Reading the JWT expiry only schedules local logout; the backend remains responsible for authentication and authorization. No data cache or refresh-token behavior is introduced.
+`src/auth.tsx` saves only the access token in local storage; passwords and current-user details are not persisted. Page reloads validate the saved token's expiry and reload `/users/me/`, keeping protected routes in a loading state until validation completes. Expired/malformed tokens and current-user authentication rejections clear the saved session. Network/server failures preserve the token and offer a retry. Logout and JWT expiry remove the token and abort authenticated requests; expiry is also checked when the window regains focus or visibility. Future feature calls should use `useAuth().request`, which supplies the bearer token and clears the session on a backend 401. Reading the JWT expiry only schedules local logout; the backend remains responsible for authentication and authorization. No data cache or refresh-token behavior is introduced.
 
 **Try it:** configure `.env.compose` following the [quickstart](../../docs/quickstart.md#1-configure-the-stack), then run this from the repository root:
 
@@ -50,9 +50,9 @@ Start with an in-memory session: refreshing the page requires login again. The b
 docker compose --env-file .env.compose up --build --wait --wait-timeout 120 frontend
 ```
 
-Open `http://localhost:8080`, choose Create an account if needed, then sign in. You can navigate the interface, but Jobs, submission, details, and Workers remain labeled placeholders until later steps. Refreshing requires login again. For hot reload, start the backend on port 8000 and run `npm run dev` from `frontend/`, then open Vite's printed URL.
+Open `http://localhost:8080`, choose Create an account if needed, then sign in. You can navigate the interface, but Jobs, submission, details, and Workers remain labeled placeholders until later steps. Reloading the page preserves login until the token expires or you sign out. For hot reload, start the backend on port 8000 and run `npm run dev` from `frontend/`, then open Vite's printed URL.
 
-**Verification:** `npm test` passed all 52 tests, including authenticated navigation, direct-route protection, form/JSON requests, current-user loading, login failures and retry, duplicate-submission prevention, registration validation and duplicate accounts, logout, refresh, timed expiry, backend 401 handling, and request cancellation. `npm run lint` and `npm run build` passed. Tests/build required execution outside the sandbox after Vite's child-process startup failed with `spawn EPERM`. Tests mock the API; a live-backend/browser walkthrough was not performed because this checkout has no `.env.compose` and no reachable API on port 8000.
+**Verification:** `npm test` passed all 63 tests, including reload persistence, current-user revalidation, restored-token expiry, malformed/expired stored tokens, authentication rejection, restoration retry after network/server failures, cancellation during restoration, and React StrictMode. Existing authentication, registration, navigation, and HTTP-client tests also pass. `npm run lint` and `npm run build` passed. Tests/build ran outside the sandbox because Vite requires child-process access. Tests mock the API; a live-backend/browser walkthrough was not performed for the persistence change. No backend changes are required.
 
 ## 4. Job submission
 
