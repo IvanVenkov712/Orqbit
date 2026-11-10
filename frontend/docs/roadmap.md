@@ -4,9 +4,9 @@ Build a small operational dashboard around Orqbit's existing public HTTP API. Pr
 
 ## Current state
 
-The frontend contains a React/TypeScript application shell with React Router, a light responsive layout, Jobs/Workers navigation, login and registration forms, a current-user area with logout, and protected application routes with explicitly labeled feature placeholders. Vite and Nginx proxy `/api` to the backend. Docker Compose includes a frontend service on port 8080.
+The frontend contains a React/TypeScript application shell with React Router, a light responsive layout, Jobs/Workers navigation, login and registration forms, a current-user area with logout, protected application routes, and private job submission. Browsing and detail screens remain explicitly labeled placeholders. Vite and Nginx proxy `/api` to the backend. Docker Compose includes a frontend service on port 8080.
 
-Steps 1–3 are implemented; steps 4–9 remain planned. Vitest, jsdom, and React Testing Library provide focused tests through `npm test`. Shared HTTP transport and persistent token authentication are available; job/worker API integration, feature screens, and TanStack Query are not implemented yet.
+Steps 1–4 are implemented; steps 5–9 remain planned. Vitest, jsdom, and React Testing Library provide focused tests through `npm test`. Shared HTTP transport, persistent token authentication, and job submission are available; job/worker browsing, details, worker registration, and TanStack Query are not implemented yet.
 
 Treat each milestone as a separate change, splitting it further when necessary. Prefer changes to one to three files; explain additional files when directly necessary. Add dependencies only when their behavior is introduced. Each behavior change should include focused verification, rather than postponing testing until the final milestone.
 
@@ -50,15 +50,21 @@ Persist the access token so page reloads preserve login until the token expires.
 docker compose --env-file .env.compose up --build --wait --wait-timeout 120 frontend
 ```
 
-Open `http://localhost:8080`, choose Create an account if needed, then sign in. You can navigate the interface, but Jobs, submission, details, and Workers remain labeled placeholders until later steps. Reloading the page preserves login until the token expires or you sign out. For hot reload, start the backend on port 8000 and run `npm run dev` from `frontend/`, then open Vite's printed URL.
+Open `http://localhost:8080`, choose Create an account if needed, then sign in. Choose Submit a job from Jobs to use the submission form. Jobs browsing, details, and Workers remain labeled placeholders until later steps. Reloading the page preserves login until the token expires or you sign out. For hot reload, start the backend on port 8000 and run `npm run dev` from `frontend/`, then open Vite's printed URL.
 
 **Verification:** `npm test` passed all 63 tests, including reload persistence, current-user revalidation, restored-token expiry, malformed/expired stored tokens, authentication rejection, restoration retry after network/server failures, cancellation during restoration, and React StrictMode. Existing authentication, registration, navigation, and HTTP-client tests also pass. `npm run lint` and `npm run build` passed. Tests/build ran outside the sandbox because Vite requires child-process access. Tests mock the API; a live-backend/browser walkthrough was not performed for the persistence change. No backend changes are required.
 
-## 4. Job submission
+## 4. Job submission — completed
 
 Implement job type, JSON-object parameters, and a private access policy. Generate an idempotency key for each intended submission and keep the same key and payload when retrying after an uncertain response. Prevent duplicate in-flight submissions and navigate to the returned job.
 
 **Done when:** malformed JSON and non-object input are rejected before submission, API validation is visible, and a network retry preserves the submission identity. An explicit new submission receives a new key; editing a rejected request does not silently reuse an old key with changed content.
+
+**Implemented:** `/jobs/new` provides labeled job-type, JSON-object parameter, and private-policy controls. Blank/oversized types, malformed JSON, and top-level arrays, primitives, or null are rejected before sending a request. Job types are preserved exactly. The form uses the authenticated HTTP client to send `POST /jobs/` with `permission_policy: "PRIVATE"` and a UUID `Idempotency-Key`, then navigates to the returned job ID. Job details remains the step 5 placeholder.
+
+Each intended submission retains a fixed payload and key in memory while the form stays open. In-flight submissions disable controls and ignore duplicate submit events. After a failure, Retry submission sends the same payload and key; Start a new submission preserves the draft for editing but discards the old identity, generating a fresh key on the next valid submit. Uncertain responses warn that the job may already exist and starting anew could create another job. Public API and field-validation errors are visible without exposing rejected inputs or internal diagnostics. Leaving the form or ending the session cancels the request; late responses cannot redirect the user. Reloading or leaving the form discards its draft and submission identity; these are not persisted across visits.
+
+**Verification:** `npm test` passed all 81 tests, including 18 new submission cases covering local validation, private authenticated requests, successful navigation, repeated network retries, server/malformed/empty responses, backend validation and conflicts, fresh keys for edited or explicitly new requests, duplicate prevention, cancellation, and authentication rejection. `npm run lint` and `npm run build` passed. Tests/build ran outside the sandbox after Vite child-process startup was blocked with `spawn EPERM`. Tests mock the API; no live-backend/browser walkthrough was performed. No dependencies or backend contracts changed.
 
 ## 5. Job details and the first complete flow
 

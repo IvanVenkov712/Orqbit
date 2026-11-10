@@ -170,11 +170,16 @@ test.each([
   ['/jobs/42', 'Job details', 'Jobs'],
   ['/workers', 'Workers', 'Workers'],
   ['/workers/17', 'Worker details', 'Workers'],
-])('restores %s after login and keeps its placeholder explicit', async (path, title, activeLink) => {
+])('restores %s after login and highlights its section', async (path, title, activeLink) => {
   await enterApp(path)
   expect(screen.getByRole('heading', { level: 1, name: title })).toBeTruthy()
-  expect(screen.getByText('Planned screen')).toBeTruthy()
-  expect(screen.getByText('You are signed in. Live job and worker data is not connected yet.')).toBeTruthy()
+  if (path === '/jobs/new') {
+    expect(screen.queryByText('Planned screen')).toBeNull()
+    expect(screen.getByRole('form', { name: 'Submit a job' })).toBeTruthy()
+  } else {
+    expect(screen.getByText('Planned screen')).toBeTruthy()
+    expect(screen.getByText('You are signed in. This screen does not load live data yet.')).toBeTruthy()
+  }
   expect(screen.getByRole('link', { name: activeLink }).getAttribute('aria-current')).toBe('page')
 })
 
@@ -377,10 +382,171 @@ test('offers recovery from an unknown route', async () => {
   expect(await screen.findByRole('heading', { level: 1, name: 'Sign in' })).toBeTruthy()
 })
 
-test('links to the submission placeholder after authentication', async () => {
+test('links to job submission after authentication', async () => {
   await enterApp()
-  fireEvent.click(screen.getByRole('link', { name: 'Preview job submission' }))
+  fireEvent.click(screen.getByRole('link', { name: 'Submit a job' }))
   expect(await screen.findByRole('heading', { level: 1, name: 'Submit a job' })).toBeTruthy()
+})
+
+function fillJob(params = '{"numbers":[2,3,5]}', jobType = 'add_numbers') {
+  fireEvent.change(screen.getByLabelText('Job type'), { target: { value: jobType } })
+  fireEvent.change(screen.getByLabelText('Parameters (JSON object)'), { target: { value: params } })
+}
+
+function submitJob() {
+  fireEvent.submit(screen.getByRole('form', { name: 'Submit a job' }))
+}
+
+test.each(['{"numbers":', '[]', 'null', 'true', '42', '"text"'])('rejects invalid object parameters %s before making a request', async (params) => {
+  await enterApp('/jobs/new')
+  fillJob(params)
+  submitJob()
+  expect(screen.getByRole('alert').textContent).toContain(params === '{"numbers":' ? 'valid JSON' : 'JSON object')
+  expect(screen.getByLabelText('Parameters (JSON object)').getAttribute('aria-invalid')).toBe('true')
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+  expect(window.location.pathname).toBe('/jobs/new')
+})
+
+test.each(['   ', 'a'.repeat(101)])('rejects an invalid job type before making a request', async (jobType) => {
+  await enterApp('/jobs/new')
+  fillJob('{}', jobType)
+  submitJob()
+  expect(screen.getByRole('alert').textContent).toContain('job type')
+  expect(screen.getByLabelText('Job type').getAttribute('aria-invalid')).toBe('true')
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+})
+
+test('submits a private job with bearer authentication and a key, preserving type and nested parameters', async () => {
+  await enterApp('/jobs/new')
+  expect((screen.getByLabelText('Access policy') as HTMLSelectElement).value).toBe('PRIVATE')
+  expect(screen.getAllByRole('option')).toHaveLength(1)
+  fillJob('{"nested":{"enabled":true,"values":[1,null,"two"]}}', ' custom_type ')
+  fetchMock.mockResolvedValueOnce(response({ id: 42 }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit job' }))
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  expect(window.location.pathname).toBe('/jobs/42')
+  const [path, options] = fetchMock.mock.calls[2]
+  expect(path).toBe('/api/jobs/')
+  expect(options?.method).toBe('POST')
+  expect(new Headers(options?.headers).get('Authorization')).toMatch(/^Bearer /)
+  expect(new Headers(options?.headers).get('Content-Type')).toBe('application/json')
+  expect(new Headers(options?.headers).get('Idempotency-Key')).toMatch(/^[0-9a-f-]{36}$/)
+  expect(JSON.parse(String(options?.body))).toEqual({
+    job_type: ' custom_type ', params: { nested: { enabled: true, values: [1, null, 'two'] } }, permission_policy: 'PRIVATE',
+  })
+  expect(localStorage.length).toBe(1)
+  expect(sessionStorage.length).toBe(0)
+})
+
+test('retries an uncertain submission repeatedly with its original key and payload', async () => {
+  await enterApp('/jobs/new')
+  fillJob()
+  fetchMock.mockRejectedValueOnce(new TypeError('private connection details'))
+  submitJob()
+  expect((await screen.findByRole('alert')).textContent).toContain('Unable to reach Orqbit')
+  expect(screen.getByRole('status').textContent).toContain('may already have been created')
+  expect(screen.getByRole('status').textContent).toContain('could create another job')
+  expect((screen.getByLabelText('Job type') as HTMLInputElement).matches(':disabled')).toBe(true)
+  expect((screen.getByLabelText('Parameters (JSON object)') as HTMLTextAreaElement).matches(':disabled')).toBe(true)
+  expect(document.body.textContent).not.toContain('private connection details')
+  fetchMock.mockRejectedValueOnce(new TypeError('second lost response'))
+  fireEvent.click(screen.getByRole('button', { name: 'Retry submission' }))
+  await screen.findByRole('alert')
+  fetchMock.mockResolvedValueOnce(response({ id: 42 }))
+  fireEvent.click(screen.getByRole('button', { name: 'Retry submission' }))
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  for (const call of fetchMock.mock.calls.slice(3)) {
+    expect(call[1]?.body).toBe(fetchMock.mock.calls[2][1]?.body)
+    expect(new Headers(call[1]?.headers).get('Idempotency-Key')).toBe(new Headers(fetchMock.mock.calls[2][1]?.headers).get('Idempotency-Key'))
+  }
+  expect(fetchMock).toHaveBeenCalledTimes(5)
+  expect(window.location.pathname).toBe('/jobs/42')
+})
+
+test.each([
+  ['server failure', () => response({ detail: 'private server details' }, 503)],
+  ['malformed response', () => new Response('not-json', { status: 200 })],
+  ['empty response', () => new Response(null, { status: 200 })],
+  ['missing job ID', () => response({ status: 'PENDING' })],
+])('retains submission identity after a %s', async (_description, failedResponse) => {
+  await enterApp('/jobs/new')
+  fillJob()
+  fetchMock.mockResolvedValueOnce(failedResponse())
+  submitJob()
+  await screen.findByRole('alert')
+  expect(window.location.pathname).toBe('/jobs/new')
+  expect(screen.getByRole('status').textContent).toContain('may already have been created')
+  expect(document.body.textContent).not.toContain('private server details')
+  fetchMock.mockResolvedValueOnce(response({ id: 42 }))
+  fireEvent.click(screen.getByRole('button', { name: 'Retry submission' }))
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  expect(fetchMock.mock.calls[3][1]?.body).toBe(fetchMock.mock.calls[2][1]?.body)
+  expect(new Headers(fetchMock.mock.calls[3][1]?.headers).get('Idempotency-Key')).toBe(new Headers(fetchMock.mock.calls[2][1]?.headers).get('Idempotency-Key'))
+})
+
+test('shows backend validation and uses a new key when a rejected request is edited', async () => {
+  await enterApp('/jobs/new')
+  fillJob()
+  fetchMock.mockResolvedValueOnce(response({ detail: [
+    { loc: ['body', 'params', 'numbers'], msg: 'Invalid numbers', type: 'value_error', input: 'private-rejected-value' },
+    { loc: ['body', 'job_type'], msg: 'Invalid job type', type: 'value_error' },
+  ] }, 422))
+  submitJob()
+  expect((await screen.findByRole('alert')).textContent).toContain('params.numbers: Invalid numbers')
+  expect(document.getElementById('job-params-error')?.textContent).toBe('Invalid numbers')
+  expect(document.getElementById('job-type-error')?.textContent).toBe('Invalid job type')
+  expect(screen.getByLabelText('Job type').getAttribute('aria-invalid')).toBe('true')
+  expect(document.body.textContent).not.toContain('private-rejected-value')
+  fireEvent.click(screen.getByRole('button', { name: 'Start a new submission' }))
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect((screen.getByLabelText('Job type') as HTMLInputElement).matches(':disabled')).toBe(false)
+  fillJob('{"numbers":[4,6]}', 'another_type')
+  fetchMock.mockResolvedValueOnce(response({ id: 43 }))
+  submitJob()
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  expect(new Headers(fetchMock.mock.calls[3][1]?.headers).get('Idempotency-Key')).not.toBe(new Headers(fetchMock.mock.calls[2][1]?.headers).get('Idempotency-Key'))
+  expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body))).toEqual({ job_type: 'another_type', params: { numbers: [4, 6] }, permission_policy: 'PRIVATE' })
+})
+
+test('an explicit new submission gets a new key even when its payload is unchanged', async () => {
+  await enterApp('/jobs/new')
+  fillJob()
+  fetchMock.mockResolvedValueOnce(response({ detail: 'Conflicting create requests' }, 409))
+  submitJob()
+  expect((await screen.findByRole('alert')).textContent).toBe('Conflicting create requests')
+  fireEvent.click(screen.getByRole('button', { name: 'Start a new submission' }))
+  fetchMock.mockResolvedValueOnce(response({ id: 43 }))
+  submitJob()
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  expect(fetchMock.mock.calls[3][1]?.body).toBe(fetchMock.mock.calls[2][1]?.body)
+  expect(new Headers(fetchMock.mock.calls[3][1]?.headers).get('Idempotency-Key')).not.toBe(new Headers(fetchMock.mock.calls[2][1]?.headers).get('Idempotency-Key'))
+})
+
+test('prevents duplicate in-flight submissions and ignores a late response after leaving the form', async () => {
+  await enterApp('/jobs/new')
+  fillJob()
+  let resolve!: (value: Response) => void
+  fetchMock.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+  submitJob()
+  expect((screen.getByRole('button', { name: 'Submitting…' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Start a new submission' }) as HTMLButtonElement).disabled).toBe(true)
+  submitJob()
+  expect(fetchMock).toHaveBeenCalledTimes(3)
+  const signal = fetchMock.mock.calls[2][1]?.signal
+  fireEvent.click(screen.getByRole('link', { name: 'Back to Jobs' }))
+  expect(signal?.aborted).toBe(true)
+  await act(async () => { resolve(response({ id: 42 })) })
+  expect(window.location.pathname).toBe('/jobs')
+})
+
+test('a rejected job credential ends the session and returns to login', async () => {
+  await enterApp('/jobs/new')
+  fillJob()
+  fetchMock.mockResolvedValueOnce(response({ detail: 'Could not validate credentials' }, 401))
+  submitJob()
+  await screen.findByRole('heading', { level: 1, name: 'Sign in' })
+  expect(localStorage.getItem(storageKey)).toBeNull()
+  expect(screen.queryByRole('form', { name: 'Submit a job' })).toBeNull()
 })
 
 // Exercise the authenticated request boundary before feature data screens exist.

@@ -69,10 +69,10 @@ function Placeholder({ title, description }: { title: string; description: strin
           This is a placeholder. {title} functionality will be added in a later
           step of the frontend roadmap.
         </p>
-        <p>You are signed in. Live job and worker data is not connected yet.</p>
+        <p>You are signed in. This screen does not load live data yet.</p>
         <div className={styles.actions}>
           {title === 'Jobs' && (
-            <Link className={styles.primaryLink} to="/jobs/new">Preview job submission</Link>
+            <Link className={styles.primaryLink} to="/jobs/new">Submit a job</Link>
           )}
           {title !== 'Jobs' && (
             <Link className={styles.secondaryLink} to="/jobs">Back to Jobs</Link>
@@ -210,6 +210,139 @@ function AuthPage({ register = false }: { register?: boolean }) {
   )
 }
 
+type JobSubmission = {
+  key: string
+  payload: { job_type: string; params: Record<string, unknown>; permission_policy: 'PRIVATE' }
+}
+
+function SubmitJobPage() {
+  const { request } = useAuth()
+  const navigate = useNavigate()
+  const [submission, setSubmission] = useState<JobSubmission | null>(null)
+  const [error, setError] = useState<ApiError | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const pending = useRef<AbortController | null>(null)
+  useEffect(() => () => { pending.current?.abort() }, [])
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (pending.current) return
+    let intended = submission
+    if (!intended) {
+      const form = new FormData(event.currentTarget)
+      const jobType = String(form.get('job_type') ?? '')
+      if (!jobType.trim() || jobType.length > 100) {
+        setError(new ApiError('Enter a job type of 1–100 characters, including a non-whitespace character.', null, [
+          { loc: ['job_type'], msg: 'Enter a non-blank job type of at most 100 characters.', type: 'value_error' },
+        ]))
+        return
+      }
+      let params: unknown
+      try {
+        params = JSON.parse(String(form.get('params') ?? ''))
+      } catch {
+        setError(new ApiError('Parameters must be valid JSON.', null, [
+          { loc: ['params'], msg: 'Enter valid JSON.', type: 'value_error' },
+        ]))
+        return
+      }
+      if (params === null || typeof params !== 'object' || Array.isArray(params)) {
+        setError(new ApiError('Parameters must be a JSON object, not an array, primitive, or null.', null, [
+          { loc: ['params'], msg: 'Enter a JSON object, for example {"numbers":[2,3,5]}.', type: 'value_error' },
+        ]))
+        return
+      }
+      // Keep this exact payload with its key until an explicit new submission.
+      intended = {
+        key: crypto.randomUUID(),
+        payload: { job_type: jobType, params: params as Record<string, unknown>, permission_policy: 'PRIVATE' },
+      }
+      setSubmission(intended)
+    }
+    const controller = new AbortController()
+    pending.current = controller
+    setSubmitting(true)
+    setError(null)
+    try {
+      const job = await request<{ id: number }>('/jobs/', {
+        method: 'POST', json: intended.payload,
+        headers: { 'Idempotency-Key': intended.key }, signal: controller.signal,
+      })
+      if (!Number.isSafeInteger(job?.id) || job.id <= 0) {
+        throw new ApiError('Orqbit returned an invalid job response. Retry the same submission.', null)
+      }
+      if (!controller.signal.aborted) navigate(`/jobs/${job.id}`)
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        setError(cause instanceof ApiError ? cause : new ApiError('Unable to submit the job. Please retry the same submission.', null))
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        pending.current = null
+        setSubmitting(false)
+      }
+    }
+  }
+
+  function fieldError(name: string) {
+    return error?.fieldErrors.filter(({ loc }) => loc.includes(name)).map(({ msg }) => msg).join(' ')
+  }
+
+  const uncertain = submission && error && (error.status === null || error.status < 400 || error.status === 408 || error.status >= 500)
+  return (
+    <>
+      <div className={styles.pageHeading}>
+        <p className={styles.eyebrow}>Jobs</p>
+        <h1>Submit a job</h1>
+        <p>Describe the work for an independent worker to process.</p>
+      </div>
+      <section className={styles.placeholder} aria-label="Job submission">
+        {error && <div className={styles.formError} role="alert">{error.message}</div>}
+        {submission && error && <p role="status">
+          {uncertain && 'The job may already have been created. Keep this page open to retry safely. '}
+          Retry sends the same request with the same submission key. To change the request, start a new submission.
+          {uncertain && ' A new submission could create another job.'}
+        </p>}
+        <form onSubmit={submit} aria-label="Submit a job" aria-busy={submitting}>
+          <fieldset className={styles.authFields} disabled={submitting || submission !== null}>
+            <div>
+              <label htmlFor="job-type">Job type</label>
+              <input id="job-type" name="job_type" required maxLength={100}
+                aria-invalid={!!fieldError('job_type')} aria-describedby="job-type-help job-type-error" />
+              <small id="job-type-help">Use the exact type supported by your worker, for example add_numbers. Spaces are preserved.</small>
+              <small id="job-type-error">{fieldError('job_type')}</small>
+            </div>
+            <div>
+              <label htmlFor="job-params">Parameters (JSON object)</label>
+              <textarea id="job-params" name="params" rows={8} defaultValue="{}" required spellCheck={false}
+                aria-invalid={!!fieldError('params')} aria-describedby="job-params-help job-params-error" />
+              <small id="job-params-help">For add_numbers, try {`{"numbers":[2,3,5]}`}.</small>
+              <small id="job-params-error">{fieldError('params')}</small>
+            </div>
+            <div>
+              <label htmlFor="job-policy">Access policy</label>
+              <select id="job-policy" name="permission_policy" aria-describedby="job-policy-help job-policy-error"
+                aria-invalid={!!fieldError('permission_policy')}>
+                <option value="PRIVATE">Private</option>
+              </select>
+              <small id="job-policy-help">Only you can read this job. Only your workers with a matching job type can claim it.</small>
+              <small id="job-policy-error">{fieldError('permission_policy')}</small>
+            </div>
+          </fieldset>
+          <div className={styles.actions}>
+            <button type="submit" disabled={submitting}>{submitting ? 'Submitting…' : submission ? 'Retry submission' : 'Submit job'}</button>
+            {submission && <button type="button" disabled={submitting} onClick={() => {
+              setSubmission(null)
+              setError(null)
+            }}>Start a new submission</button>}
+          </div>
+        </form>
+        <div className={styles.actions}><Link to="/jobs">Back to Jobs</Link></div>
+      </section>
+    </>
+  )
+}
+
 function NotFound() {
   return (
     <section className={styles.placeholder}>
@@ -230,7 +363,7 @@ function App() {
             <Route index element={<Navigate to="/jobs" replace />} />
             <Route element={<RequireAuth />}>
               <Route path="jobs" element={<Placeholder title="Jobs" description="A place to submit work and follow its outcome." />} />
-              <Route path="jobs/new" element={<Placeholder title="Submit a job" description="Describe the work for an independent worker to process." />} />
+              <Route path="jobs/new" element={<SubmitJobPage />} />
               <Route path="jobs/:jobId" element={<Placeholder title="Job details" description="Inspect a job, its result, and its execution attempts." />} />
               <Route path="workers" element={<Placeholder title="Workers" description="A place to register and inspect independent workers." />} />
               <Route path="workers/:workerId" element={<Placeholder title="Worker details" description="Inspect a worker's registration and supported job types." />} />

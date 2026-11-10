@@ -181,6 +181,8 @@
 
 .authFields label,
 .authFields input,
+.authFields textarea,
+.authFields select,
 .authFields small {
   display: block;
   width: 100%;
