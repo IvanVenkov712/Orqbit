@@ -388,28 +388,62 @@ test('links to job submission after authentication', async () => {
   expect(await screen.findByRole('heading', { level: 1, name: 'Submit a job' })).toBeTruthy()
 })
 
-function fillJob(params = '{"numbers":[2,3,5]}', jobType = 'add_numbers') {
+function addParameter(name: string | undefined, value: unknown, path = 'Parameters', index = 1) {
+  fireEvent.click(screen.getByRole('button', { name: `Add ${name === undefined ? 'item' : 'parameter'} to ${path}` }))
+  const title = `${path} ${index}`
+  if (name !== undefined) fireEvent.change(screen.getByLabelText(`Name for ${title}`), { target: { value: name } })
+  const type = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value === 'string' ? 'text' : typeof value
+  fireEvent.change(screen.getByLabelText(`Type for ${title}`), { target: { value: type } })
+  if (Array.isArray(value)) {
+    value.forEach((item, i) => addParameter(undefined, item, `${title} items`, i + 1))
+  } else if (value !== null && typeof value === 'object') {
+    Object.entries(value).forEach(([key, item], i) => addParameter(key, item, `${title} fields`, i + 1))
+  } else if (value !== null) {
+    fireEvent.change(screen.getByLabelText(`Value for ${title}`), { target: { value: String(value) } })
+  }
+}
+
+function fillJob(params: Record<string, unknown> = { numbers: [2, 3, 5] }, jobType = 'add_numbers') {
   fireEvent.change(screen.getByLabelText('Job type'), { target: { value: jobType } })
-  fireEvent.change(screen.getByLabelText('Parameters (JSON object)'), { target: { value: params } })
+  for (const button of screen.queryAllByRole('button', { name: /^Remove Parameters \d+$/ })) fireEvent.click(button)
+  Object.entries(params).forEach(([name, value], i) => addParameter(name, value, 'Parameters', i + 1))
 }
 
 function submitJob() {
   fireEvent.submit(screen.getByRole('form', { name: 'Submit a job' }))
 }
 
-test.each(['{"numbers":', '[]', 'null', 'true', '42', '"text"'])('rejects invalid object parameters %s before making a request', async (params) => {
+test.each(['', 'NaN', 'Infinity', '1e309', '0x10', '2oops'])('rejects an invalid number "%s" before making a request', async (value) => {
   await enterApp('/jobs/new')
-  fillJob(params)
+  fillJob({ amount: 1 })
+  fireEvent.change(screen.getByLabelText('Value for Parameters 1'), { target: { value } })
   submitJob()
-  expect(screen.getByRole('alert').textContent).toContain(params === '{"numbers":' ? 'valid JSON' : 'JSON object')
-  expect(screen.getByLabelText('Parameters (JSON object)').getAttribute('aria-invalid')).toBe('true')
+  expect(screen.getByRole('alert').textContent).toContain('Parameters.amount: enter a finite number')
+  expect(screen.getByRole('group', { name: 'Parameters' }).getAttribute('aria-invalid')).toBe('true')
   expect(fetchMock).toHaveBeenCalledTimes(2)
   expect(window.location.pathname).toBe('/jobs/new')
 })
 
+test.each(['', '   '])('rejects a blank parameter name "%s"', async (name) => {
+  await enterApp('/jobs/new')
+  fillJob({ [name]: 'value' })
+  submitJob()
+  expect(screen.getByRole('alert').textContent).toContain('each parameter needs a name')
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+})
+
+test.each([false, true])('rejects duplicate names within an object (nested: %s)', async (nested) => {
+  await enterApp('/jobs/new')
+  fillJob(nested ? { options: { count: 1, other: 2 } } : { count: 1, other: 2 })
+  fireEvent.change(screen.getByLabelText(`Name for ${nested ? 'Parameters 1 fields 2' : 'Parameters 2'}`), { target: { value: 'count' } })
+  submitJob()
+  expect(screen.getByRole('alert').textContent).toContain('duplicate parameter name "count"')
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+})
+
 test.each(['   ', 'a'.repeat(101)])('rejects an invalid job type before making a request', async (jobType) => {
   await enterApp('/jobs/new')
-  fillJob('{}', jobType)
+  fillJob({}, jobType)
   submitJob()
   expect(screen.getByRole('alert').textContent).toContain('job type')
   expect(screen.getByLabelText('Job type').getAttribute('aria-invalid')).toBe('true')
@@ -419,8 +453,8 @@ test.each(['   ', 'a'.repeat(101)])('rejects an invalid job type before making a
 test('submits a private job with bearer authentication and a key, preserving type and nested parameters', async () => {
   await enterApp('/jobs/new')
   expect((screen.getByLabelText('Access policy') as HTMLSelectElement).value).toBe('PRIVATE')
-  expect(screen.getAllByRole('option')).toHaveLength(1)
-  fillJob('{"nested":{"enabled":true,"values":[1,null,"two"]}}', ' custom_type ')
+  expect(screen.getByLabelText('Access policy').querySelectorAll('option')).toHaveLength(1)
+  fillJob({ nested: { enabled: true, values: [1, null, 'two'] } }, ' custom_type ')
   fetchMock.mockResolvedValueOnce(response({ id: 42 }))
   fireEvent.click(screen.getByRole('button', { name: 'Submit job' }))
   await screen.findByRole('heading', { level: 1, name: 'Job details' })
@@ -438,6 +472,79 @@ test('submits a private job with bearer authentication and a key, preserving typ
   expect(sessionStorage.length).toBe(0)
 })
 
+test('submits all value types, preserving text and names, mixed lists, and empty containers', async () => {
+  await enterApp('/jobs/new')
+  const params = {
+    ' exact name ': '123', text: 'false\n"quoted"', emptyText: '', decimal: -1.25, zero: 0,
+    enabled: true, disabled: false, absent: null, emptyObject: {}, emptyList: [],
+    mixed: [{ same: false }, { same: true }, [1, 'two', null], []],
+  }
+  fillJob(params)
+  fetchMock.mockResolvedValueOnce(response({ id: 42 }))
+  submitJob()
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body)).params).toEqual(params)
+})
+
+test('an empty editor submits an empty object', async () => {
+  await enterApp('/jobs/new')
+  fillJob({})
+  fetchMock.mockResolvedValueOnce(response({ id: 42 }))
+  submitJob()
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body)).params).toEqual({})
+})
+
+test('removing parameters, nested fields, and list items preserves the remaining values and order', async () => {
+  await enterApp('/jobs/new')
+  fillJob({ options: { remove: 'gone', keep: 'kept' }, numbers: [2, 3, 5], remove: true })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Parameters 1 fields 1' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Parameters 2 items 2' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Parameters 3' }))
+  fetchMock.mockResolvedValueOnce(response({ id: 42 }))
+  submitJob()
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body)).params).toEqual({ options: { keep: 'kept' }, numbers: [2, 5] })
+})
+
+test('changing a type clears incompatible values and child fields', async () => {
+  await enterApp('/jobs/new')
+  fillJob({ value: { old: 'discard' } })
+  fireEvent.change(screen.getByLabelText('Type for Parameters 1'), { target: { value: 'boolean' } })
+  expect(screen.queryByLabelText('Name for Parameters 1 fields 1')).toBeNull()
+  expect((screen.getByLabelText('Value for Parameters 1') as HTMLSelectElement).value).toBe('false')
+  fireEvent.change(screen.getByLabelText('Type for Parameters 1'), { target: { value: 'text' } })
+  expect((screen.getByLabelText('Value for Parameters 1') as HTMLTextAreaElement).value).toBe('')
+  fireEvent.change(screen.getByLabelText('Value for Parameters 1'), { target: { value: 'new text' } })
+  fetchMock.mockResolvedValueOnce(response({ id: 42 }))
+  submitJob()
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body)).params).toEqual({ value: 'new text' })
+})
+
+test('parameter names such as __proto__ are submitted as ordinary object properties', async () => {
+  await enterApp('/jobs/new')
+  const params = JSON.parse('{"__proto__":{"value":3},"constructor":"text"}')
+  fillJob(params)
+  fetchMock.mockResolvedValueOnce(response({ id: 42 }))
+  submitJob()
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body)).params).toEqual(params)
+})
+
+test('correcting a parameter error allows submission without discarding the draft', async () => {
+  await enterApp('/jobs/new')
+  fillJob({ count: 1 })
+  fireEvent.change(screen.getByLabelText('Value for Parameters 1'), { target: { value: 'invalid' } })
+  submitJob()
+  expect(screen.getByRole('alert')).toBeTruthy()
+  fireEvent.change(screen.getByLabelText('Value for Parameters 1'), { target: { value: '2e3' } })
+  fetchMock.mockResolvedValueOnce(response({ id: 42 }))
+  submitJob()
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body)).params).toEqual({ count: 2000 })
+})
+
 test('retries an uncertain submission repeatedly with its original key and payload', async () => {
   await enterApp('/jobs/new')
   fillJob()
@@ -447,7 +554,11 @@ test('retries an uncertain submission repeatedly with its original key and paylo
   expect(screen.getByRole('status').textContent).toContain('may already have been created')
   expect(screen.getByRole('status').textContent).toContain('could create another job')
   expect((screen.getByLabelText('Job type') as HTMLInputElement).matches(':disabled')).toBe(true)
-  expect((screen.getByLabelText('Parameters (JSON object)') as HTMLTextAreaElement).matches(':disabled')).toBe(true)
+  for (const name of ['Name for Parameters 1', 'Type for Parameters 1', 'Value for Parameters 1 items 1']) {
+    expect((screen.getByLabelText(name) as HTMLInputElement).matches(':disabled')).toBe(true)
+  }
+  expect(screen.getByRole('button', { name: 'Add parameter to Parameters' }).matches(':disabled')).toBe(true)
+  expect(screen.getByRole('button', { name: 'Remove Parameters 1' }).matches(':disabled')).toBe(true)
   expect(document.body.textContent).not.toContain('private connection details')
   fetchMock.mockRejectedValueOnce(new TypeError('second lost response'))
   fireEvent.click(screen.getByRole('button', { name: 'Retry submission' }))
@@ -496,11 +607,14 @@ test('shows backend validation and uses a new key when a rejected request is edi
   expect(document.getElementById('job-params-error')?.textContent).toBe('Invalid numbers')
   expect(document.getElementById('job-type-error')?.textContent).toBe('Invalid job type')
   expect(screen.getByLabelText('Job type').getAttribute('aria-invalid')).toBe('true')
+  expect(screen.getByRole('group', { name: 'Parameters' }).getAttribute('aria-invalid')).toBe('true')
   expect(document.body.textContent).not.toContain('private-rejected-value')
   fireEvent.click(screen.getByRole('button', { name: 'Start a new submission' }))
   expect(screen.queryByRole('alert')).toBeNull()
   expect((screen.getByLabelText('Job type') as HTMLInputElement).matches(':disabled')).toBe(false)
-  fillJob('{"numbers":[4,6]}', 'another_type')
+  expect((screen.getByLabelText('Name for Parameters 1') as HTMLInputElement).value).toBe('numbers')
+  expect((screen.getByLabelText('Value for Parameters 1 items 1') as HTMLInputElement).value).toBe('2')
+  fillJob({ numbers: [4, 6] }, 'another_type')
   fetchMock.mockResolvedValueOnce(response({ id: 43 }))
   submitJob()
   await screen.findByRole('heading', { level: 1, name: 'Job details' })

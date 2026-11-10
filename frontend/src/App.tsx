@@ -13,6 +13,8 @@ import {
 } from 'react-router'
 import { ApiError, apiRequest } from './api/client'
 import { AuthProvider, useAuth } from './auth'
+import { ParameterEditor, readParameters } from './ParameterEditor'
+import type { Parameter } from './ParameterEditor'
 import orqbitIcon from './assets/orqbit-icon.svg'
 import styles from './App.module.css'
 
@@ -219,6 +221,7 @@ function SubmitJobPage() {
   const { request } = useAuth()
   const navigate = useNavigate()
   const [submission, setSubmission] = useState<JobSubmission | null>(null)
+  const [parameters, setParameters] = useState<Parameter[]>([])
   const [error, setError] = useState<ApiError | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const pending = useRef<AbortController | null>(null)
@@ -237,25 +240,20 @@ function SubmitJobPage() {
         ]))
         return
       }
-      let params: unknown
+      let params: Record<string, unknown>
       try {
-        params = JSON.parse(String(form.get('params') ?? ''))
-      } catch {
-        setError(new ApiError('Parameters must be valid JSON.', null, [
-          { loc: ['params'], msg: 'Enter valid JSON.', type: 'value_error' },
-        ]))
-        return
-      }
-      if (params === null || typeof params !== 'object' || Array.isArray(params)) {
-        setError(new ApiError('Parameters must be a JSON object, not an array, primitive, or null.', null, [
-          { loc: ['params'], msg: 'Enter a JSON object, for example {"numbers":[2,3,5]}.', type: 'value_error' },
+        params = readParameters(parameters)
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : 'Check the parameter names and values.'
+        setError(new ApiError(message, null, [
+          { loc: ['params'], msg: message, type: 'value_error' },
         ]))
         return
       }
       // Keep this exact payload with its key until an explicit new submission.
       intended = {
         key: crypto.randomUUID(),
-        payload: { job_type: jobType, params: params as Record<string, unknown>, permission_policy: 'PRIVATE' },
+        payload: { job_type: jobType, params, permission_policy: 'PRIVATE' },
       }
       setSubmission(intended)
     }
@@ -312,13 +310,13 @@ function SubmitJobPage() {
               <small id="job-type-help">Use the exact type supported by your worker, for example add_numbers. Spaces are preserved.</small>
               <small id="job-type-error">{fieldError('job_type')}</small>
             </div>
-            <div>
-              <label htmlFor="job-params">Parameters (JSON object)</label>
-              <textarea id="job-params" name="params" rows={8} defaultValue="{}" required spellCheck={false}
-                aria-invalid={!!fieldError('params')} aria-describedby="job-params-help job-params-error" />
-              <small id="job-params-help">For add_numbers, try {`{"numbers":[2,3,5]}`}.</small>
+            <fieldset className={styles.parameterGroup} aria-label="Parameters"
+              aria-invalid={!!fieldError('params')} aria-describedby="job-params-help job-params-error">
+              <legend>Parameters</legend>
+              <p id="job-params-help">Add named parameters and choose each value's type. Objects contain named fields; lists contain ordered items.</p>
+              <ParameterEditor parameters={parameters} onChange={setParameters} />
               <small id="job-params-error">{fieldError('params')}</small>
-            </div>
+            </fieldset>
             <div>
               <label htmlFor="job-policy">Access policy</label>
               <select id="job-policy" name="permission_policy" aria-describedby="job-policy-help job-policy-error"
