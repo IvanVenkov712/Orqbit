@@ -6,7 +6,7 @@ Build a small operational dashboard around Orqbit's existing public HTTP API. Pr
 
 The frontend contains a React/TypeScript application shell with React Router, a light responsive layout, Jobs/Workers navigation, a signed-out user area, and explicitly labeled route placeholders. Vite and Nginx proxy `/api` to the backend. Docker Compose includes a frontend service on port 8080.
 
-Step 1 is implemented; steps 2–9 remain planned. Vitest, jsdom, and React Testing Library provide focused component tests through `npm test`. Authentication, API integration, feature screens, and TanStack Query are not implemented yet.
+Steps 1–2 are implemented; steps 3–9 remain planned. Vitest, jsdom, and React Testing Library provide focused tests through `npm test`. Shared HTTP transport is available; authentication, feature API integration, feature screens, and TanStack Query are not implemented yet.
 
 Treat each milestone as a separate change, splitting it further when necessary. Prefer changes to one to three files; explain additional files when directly necessary. Add dependencies only when their behavior is introduced. Each behavior change should include focused verification, rather than postponing testing until the final milestone.
 
@@ -20,11 +20,17 @@ Replace the starter content with a simple layout. Introduce React Router, naviga
 
 **Verification:** `npm test` passed all 11 routing/component tests, including browser history, direct route entry, active navigation, placeholder links, and unknown-route recovery. `npm run lint` and `npm run build` passed. Headless Edge checks confirmed navigation, browser back/forward, direct reload, unknown-route recovery, visible keyboard focus on the skip link, and no horizontal overflow at 320px, 390px, and 1280px. Direct route requests to the Vite server returned the application shell. No backend integration is introduced in this step.
 
-## 2. Shared HTTP client
+## 2. Shared HTTP client — completed
 
 Add `src/api/client.ts` for `/api` requests, bearer authentication, response parsing, and meaningful errors. Support JSON and form-encoded bodies. Define request/response types beside each feature when needed; keep transport concerns out of page components.
 
 **Done when:** the client handles success, network failures, string API errors, and field-validation errors. Login can send form data without an incorrect JSON content type. Credentials and raw internal errors are not exposed in diagnostics or the UI.
+
+**Implemented:** `src/api/client.ts` exports `apiRequest<T>(path, options)` and `ApiError`. Paths such as `/users/me/` are prefixed with `/api` without changing endpoint slashes or query parameters. Options accept a per-request `token`, `json` or a form-encoded `URLSearchParams` in `form`, plus standard fetch options and headers. The client sets the matching content type, preserves custom headers such as `Idempotency-Key`, parses JSON, and returns `undefined` for empty responses (use `T = void`). It does not store tokens or manage sessions.
+
+`ApiError` exposes HTTP `status` (`null` for network failures) and `fieldErrors` containing only `loc`, `msg`, and `type`. Public string `detail` and field-validation messages from 4xx responses are preserved; validation summaries include field paths. Rejected inputs, validation context, request credentials, and original network/parser exceptions are not attached to errors. Server failures and malformed responses use safe fallback messages. Cancellation through an `AbortSignal` retains a sanitized `AbortError`.
+
+**Verification:** `npm test` passed all 31 tests, including 20 HTTP-client cases covering JSON/form encoding, bearer headers, custom headers, empty responses, public errors, field paths, malformed errors, server failures, network/response-stream failures, and cancellation. `npm run lint` and `npm run build` passed. Vite required running tests/build outside the sandbox after its child-process startup was blocked with `spawn EPERM`. HTTP tests use mocked fetch responses; real-backend feature integration begins in later steps.
 
 ## 3. Authentication
 
