@@ -9,6 +9,10 @@ import orqbitIcon from './assets/orqbit-icon.svg'
 const user = { id: 7, username: 'demo-user', email: 'demo@example.com', full_name: 'Demo User', active: true, role: 'REGULAR' }
 const fetchMock = vi.fn<typeof fetch>()
 const storageKey = 'orqbit.access_token'
+const worker = {
+  id: 17, user_id: user.id, name: 'numbers-worker', active: true,
+  supported_types: ['add_numbers', 'sum'], permission_policy: 'PRIVATE', permitted_user_ids: [],
+}
 const job = {
   id: 42, user_id: user.id, job_type: 'add_numbers', status: 'SUCCEEDED',
   params: { numbers: [2, 3, 5] }, result: { sum: 10 }, error: null,
@@ -40,6 +44,8 @@ beforeEach(() => {
     if (String(path).startsWith('/api/jobs?')) return response([{ ...job, status: new URL(String(path), 'http://localhost').searchParams.get('status') ?? 'PENDING' }])
     if (/^\/api\/jobs\/\d+$/.test(String(path))) return response(job)
     if (String(path).startsWith('/api/jobs/42/attempts?')) return response([attempt])
+    if (String(path).startsWith('/api/workers?')) return response([worker])
+    if (/^\/api\/workers\/\d+$/.test(String(path))) return response(worker)
     throw new Error('Unexpected request')
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -91,7 +97,7 @@ test.each(['/login', '/register'])('uses the Orqbit icon on %s without session i
   expect(screen.queryByText(/Your session stays in memory/)).toBeNull()
 })
 
-test.each(['/jobs', '/jobs/new', '/jobs/42', '/jobs/42/attempts', '/workers', '/workers/17'])(
+test.each(['/jobs', '/jobs/new', '/jobs/42', '/jobs/42/attempts', '/workers', '/workers/new', '/workers/17'])(
   'protects direct entry to %s', (path) => {
     window.history.replaceState(null, '', path)
     render(<App />)
@@ -185,6 +191,7 @@ test.each([
   ['/jobs/42', 'Job details', 'Jobs'],
   ['/jobs/42/attempts', 'Attempt history', 'Jobs'],
   ['/workers', 'Workers', 'Workers'],
+  ['/workers/new', 'Register a worker', 'Workers'],
   ['/workers/17', 'Worker details', 'Workers'],
 ])('restores %s after login and highlights its section', async (path, title, activeLink) => {
   await enterApp(path)
@@ -199,8 +206,12 @@ test.each([
     expect(await screen.findByRole('table', { name: 'Submitted jobs' })).toBeTruthy()
   } else if (path === '/jobs/42/attempts') {
     expect(await screen.findByRole('region', { name: 'Execution attempts' })).toBeTruthy()
+  } else if (path === '/workers') {
+    expect(await screen.findByRole('table', { name: 'Registered workers' })).toBeTruthy()
+  } else if (path === '/workers/new') {
+    expect(screen.getByRole('form', { name: 'Register a worker' })).toBeTruthy()
   } else {
-    expect(screen.getByText('Worker management is not available yet.')).toBeTruthy()
+    expect(await screen.findByRole('region', { name: 'Worker metadata' })).toBeTruthy()
   }
   expect(screen.queryByText(/frontend roadmap|does not load live data|Refreshes every/)).toBeNull()
   expect(screen.getByRole('link', { name: activeLink }).getAttribute('aria-current')).toBe('page')
@@ -221,6 +232,7 @@ test('signs out and prevents browser back from reopening a protected screen', as
 test('preserves login and the requested URL after a page reload while validating the current user', async () => {
   const path = '/workers/17?view=details#registration'
   await enterApp(path)
+  await screen.findByRole('region', { name: 'Worker metadata' })
   const accessToken = localStorage.getItem(storageKey)
   cleanup()
   let resolve!: (value: Response) => void
@@ -230,12 +242,13 @@ test('preserves login and the requested URL after a page reload while validating
   expect(screen.queryByRole('heading', { level: 1, name: 'Sign in' })).toBeNull()
   expect(screen.queryByText('Planned screen')).toBeNull()
   expect(window.location.pathname + window.location.search + window.location.hash).toBe(path)
-  expect(fetchMock.mock.calls[2][0]).toBe('/api/users/me/')
-  expect(new Headers(fetchMock.mock.calls[2][1]?.headers).get('Authorization')).toBe(`Bearer ${accessToken}`)
+  expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/users/me/')
+  expect(new Headers(fetchMock.mock.calls.at(-1)?.[1]?.headers).get('Authorization')).toBe(`Bearer ${accessToken}`)
   await act(async () => { resolve(response({ ...user, full_name: 'Updated Name' })) })
   expect(await screen.findByRole('heading', { level: 1, name: 'Worker details' })).toBeTruthy()
   expect(screen.getByRole('group', { name: 'Current user' }).textContent).toContain('Updated Name')
-  expect(fetchMock).toHaveBeenCalledTimes(3)
+  await screen.findByRole('region', { name: 'Worker metadata' })
+  expect(fetchMock.mock.calls.filter(([path]) => path === '/api/users/me/')).toHaveLength(2)
   expect(localStorage.getItem(storageKey)).toBe(accessToken)
 })
 
@@ -271,8 +284,8 @@ test.each(['network', 'server'])('keeps the stored token on a %s restoration fai
   expect(screen.queryByRole('heading', { level: 1, name: 'Sign in' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   expect(await screen.findByRole('heading', { level: 1, name: 'Worker details' })).toBeTruthy()
-  expect(fetchMock).toHaveBeenCalledTimes(2)
-  expect(fetchMock.mock.calls.every(([path]) => path === '/api/users/me/')).toBe(true)
+  await screen.findByRole('region', { name: 'Worker metadata' })
+  expect(fetchMock.mock.calls.filter(([path]) => path === '/api/users/me/')).toHaveLength(2)
 })
 
 test('logout during restoration cancels the request and prevents a late response restoring the session', async () => {
@@ -1069,6 +1082,304 @@ test('discards cached job data on logout before another account signs in', async
   await screen.findByRole('heading', { name: 'Job unavailable' })
   expect(screen.queryByRole('region', { name: 'Outcome' })).toBeNull()
   expect(document.body.textContent).not.toContain('demo-user (you)')
+})
+
+function fillWorkerRegistration(types = 'add_numbers\nsum\nadd_numbers') {
+  fireEvent.change(screen.getByLabelText('Worker name'), { target: { value: worker.name } })
+  fireEvent.change(screen.getByLabelText('Supported types'), { target: { value: types } })
+  fireEvent.submit(screen.getByRole('form', { name: 'Register a worker' }))
+}
+
+test('lists only the current user workers with metadata and no API keys', async () => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => String(path).startsWith('/api/workers?')
+    ? response([{ ...worker, secret_api_key: 'never-show-key', secret_api_key_hash: 'never-show-hash' }, { ...worker, id: 18, user_id: 99, name: 'other-owner' }])
+    : original(path, options))
+  await enterApp('/workers')
+  const table = await screen.findByRole('table', { name: 'Registered workers' })
+  expect(table.textContent).toContain(user.username)
+  expect(table.textContent).toContain('add_numbers, sum')
+  expect(table.textContent).toContain('Credential/registration status')
+  expect(table.textContent).toContain('Active')
+  expect(table.textContent).toContain('Private')
+  expect(table.textContent).not.toContain('other-owner')
+  expect(document.body.textContent).not.toMatch(/never-show-key|never-show-hash/)
+  expect(screen.getByText(/does not establish that a worker process is online/)).toBeTruthy()
+  expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers?owner_id=7&limit=20&offset=0')).toBe(true)
+  fireEvent.click(screen.getByRole('link', { name: worker.name }))
+  const details = await screen.findByRole('region', { name: 'Worker metadata' })
+  expect(details.textContent).toContain('#17')
+  expect(details.textContent).toContain('demo-user (you)')
+  expect(within(details).getAllByRole('listitem').map((item) => item.textContent)).toEqual(worker.supported_types)
+  expect(screen.queryByRole('button', { name: 'Copy API key' })).toBeNull()
+})
+
+test.each([
+  ['/workers', 'You have no registered workers yet.'],
+  ['/workers?job_type=unknown', 'None of your workers support this job type.'],
+  ['/workers?offset=20', 'No more workers on this page.'],
+])('shows a useful empty worker state at %s', async (path, message) => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => String(path).startsWith('/api/workers?') ? response([]) : original(path, options))
+  await enterApp(path)
+  expect(await screen.findByText(message)).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'Register a worker' })).toBeTruthy()
+  if (path.includes('offset')) {
+    expect((screen.getByRole('button', { name: 'Previous workers' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'Next workers' }) as HTMLButtonElement).disabled).toBe(true)
+  }
+})
+
+test('preserves worker type filters, pages and unrelated parameters across navigation and reload', async () => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => String(path).startsWith('/api/workers?')
+    ? response(new URL(String(path), 'http://localhost').searchParams.get('offset') === '40' ? [] : Array.from({ length: 20 }, (_, i) => ({ ...worker, id: 100 + i, name: `worker-${i}` })))
+    : original(path, options))
+  await enterApp('/workers?job_type=add_numbers&offset=20&view=mine')
+  await screen.findByRole('table', { name: 'Registered workers' })
+  fireEvent.click(screen.getByRole('button', { name: 'Next workers' }))
+  await screen.findByText('No more workers on this page.')
+  expect(window.location.search).toBe('?job_type=add_numbers&offset=40&view=mine')
+  fireEvent.click(screen.getByRole('button', { name: 'Previous workers' }))
+  await screen.findByRole('table', { name: 'Registered workers' })
+  expect(window.location.search).toBe('?job_type=add_numbers&offset=20&view=mine')
+  fireEvent.change(screen.getByLabelText('Supported job type'), { target: { value: 'sum & more' } })
+  fireEvent.submit(screen.getByRole('form', { name: 'Filter workers' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers?owner_id=7&limit=20&offset=0&job_type=sum+%26+more')).toBe(true))
+  expect(window.location.search).toBe('?job_type=sum+%26+more&view=mine')
+  await act(async () => { window.history.back() })
+  await waitFor(() => expect(window.location.search).toBe('?job_type=add_numbers&offset=20&view=mine'))
+  expect((screen.getByLabelText('Supported job type') as HTMLInputElement).value).toBe('add_numbers')
+  await act(async () => { window.history.forward() })
+  await waitFor(() => expect((screen.getByLabelText('Supported job type') as HTMLInputElement).value).toBe('sum & more'))
+  cleanup()
+  render(<App />)
+  await screen.findByRole('table', { name: 'Registered workers' })
+  expect((screen.getByLabelText('Supported job type') as HTMLInputElement).value).toBe('sum & more')
+  expect(window.location.search).toBe('?job_type=sum+%26+more&view=mine')
+  fireEvent.change(screen.getByLabelText('Supported job type'), { target: { value: '' } })
+  fireEvent.submit(screen.getByRole('form', { name: 'Filter workers' }))
+  expect(window.location.search).toBe('?view=mine')
+})
+
+test.each(['-1', 'invalid', '1.5', '9007199254740992'])('normalizes invalid worker offset %s before requesting', async (offset) => {
+  await enterApp(`/workers?offset=${offset}`)
+  await screen.findByRole('table', { name: 'Registered workers' })
+  expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers?owner_id=7&limit=20&offset=0')).toBe(true)
+})
+
+test.each(['/workers', '/workers/17'])('shows worker loading and failure states with manual retry at %s', async (route) => {
+  const original = fetchMock.getMockImplementation()!
+  let resolve!: (value: Response) => void
+  let fail = true
+  fetchMock.mockImplementation(async (path, options) => {
+    if (String(path).startsWith('/api/workers') && fail) return new Promise((done) => { resolve = done })
+    return original(path, options)
+  })
+  await enterApp(route)
+  expect(screen.getByRole('status').textContent).toMatch(/Loading worker/)
+  await act(async () => { resolve(response({ detail: 'private server detail' }, 503)) })
+  expect((await screen.findByRole('alert')).textContent).toContain('temporarily unavailable')
+  fail = false
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  if (route === '/workers') await screen.findByRole('table', { name: 'Registered workers' })
+  else await screen.findByRole('region', { name: 'Worker metadata' })
+})
+
+test.each(['not-a-number', '0', '-1', '9007199254740992'])('rejects invalid worker ID %s without fetching', async (id) => {
+  await enterApp(`/workers/${id}`)
+  expect(screen.getByRole('heading', { name: 'Worker unavailable' })).toBeTruthy()
+  expect(fetchMock.mock.calls.some(([path]) => String(path).startsWith('/api/workers'))).toBe(false)
+})
+
+test.each(['missing', 'inaccessible', 'other-owner'])('hides worker details when %s', async (reason) => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => path === '/api/workers/17'
+    ? reason === 'other-owner' ? response({ ...worker, user_id: 888, name: 'hidden-worker' }) : response({ detail: 'Worker not found' }, reason === 'missing' ? 404 : 403)
+    : original(path, options))
+  await enterApp('/workers/17')
+  await screen.findByRole('heading', { name: 'Worker unavailable' })
+  expect(screen.queryByRole('region', { name: 'Worker metadata' })).toBeNull()
+  expect(document.body.textContent).not.toContain('hidden-worker')
+})
+
+test('shows inactive credentials and visibility grants without displaying unexpected secrets', async () => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => path === '/api/workers/17'
+    ? response({ ...worker, active: false, permission_policy: 'PERMITTED_USERS', permitted_user_ids: [12, 15], secret_api_key: 'never-show-key', secret_api_key_hash: 'never-show-hash' })
+    : original(path, options))
+  await enterApp('/workers/17')
+  const details = await screen.findByRole('region', { name: 'Worker metadata' })
+  expect(details.textContent).toContain('Inactive')
+  expect(details.textContent).toContain('Permitted users')
+  expect(details.textContent).toContain('12, 15')
+  expect(details.textContent).not.toMatch(/never-show-key|never-show-hash/)
+})
+
+test('registers privately and shows the key once with explicit copy and save instructions', async () => {
+  const original = fetchMock.getMockImplementation()!
+  const secret = 'one-time-worker-key'
+  fetchMock.mockImplementation(async (path, options) => path === '/api/workers' && options?.method === 'POST'
+    ? response({ ...worker, secret_api_key: secret }) : original(path, options))
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  const setItem = vi.spyOn(Storage.prototype, 'setItem')
+  await enterApp('/workers/new')
+  expect((screen.getByLabelText('Visibility policy') as HTMLSelectElement).value).toBe('PRIVATE')
+  fillWorkerRegistration()
+  const key = await screen.findByLabelText('New worker API key')
+  expect(key.textContent).toBe(secret)
+  expect(screen.getByText(/cannot be retrieved after leaving or reloading/)).toBeTruthy()
+  expect(screen.getByText(/API_KEY setting/)).toBeTruthy()
+  const [, options] = fetchMock.mock.calls.find(([path, options]) => path === '/api/workers' && options?.method === 'POST')!
+  expect(JSON.parse(String(options?.body))).toEqual({ name: worker.name, supported_types: ['add_numbers', 'sum'], permission_policy: 'PRIVATE' })
+  expect(new Headers(options?.headers).get('Authorization')).toMatch(/^Bearer /)
+  expect(writeText).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Copy API key' }))
+  expect((await screen.findByRole('status')).textContent).toContain('API key copied')
+  expect(writeText).toHaveBeenCalledExactlyOnceWith(secret)
+  expect(localStorage.length).toBe(1)
+  expect(sessionStorage.length).toBe(0)
+  expect(setItem.mock.calls.some((args) => args.some((arg) => String(arg).includes(secret)))).toBe(false)
+  expect(JSON.stringify(window.history.state)).not.toContain(secret)
+  expect(window.location.href).not.toContain(secret)
+  fireEvent.click(screen.getByRole('link', { name: /I've saved the key/ }))
+  await screen.findByRole('region', { name: 'Worker metadata' })
+  expect(document.body.textContent).not.toContain(secret)
+  await act(async () => { window.history.back() })
+  await screen.findByRole('form', { name: 'Register a worker' })
+  expect(screen.queryByLabelText('New worker API key')).toBeNull()
+})
+
+test('discards the new key on reload and does not repeat registration', async () => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => path === '/api/workers'
+    ? response({ ...worker, secret_api_key: 'discard-on-reload' }) : original(path, options))
+  await enterApp('/workers/new')
+  fillWorkerRegistration()
+  await screen.findByLabelText('New worker API key')
+  cleanup()
+  render(<App />)
+  await screen.findByRole('form', { name: 'Register a worker' })
+  expect(document.body.textContent).not.toContain('discard-on-reload')
+  expect(fetchMock.mock.calls.filter(([path]) => path === '/api/workers')).toHaveLength(1)
+})
+
+test('offers manual key copying when clipboard access fails', async () => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => path === '/api/workers'
+    ? response({ ...worker, secret_api_key: 'manual-copy-key' }) : original(path, options))
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error('Clipboard denied')) } })
+  await enterApp('/workers/new')
+  fillWorkerRegistration()
+  await screen.findByLabelText('New worker API key')
+  fireEvent.click(screen.getByRole('button', { name: 'Copy API key' }))
+  expect((await screen.findByRole('status')).textContent).toContain('copy it manually')
+  expect(screen.getByLabelText('New worker API key').textContent).toBe('manual-copy-key')
+})
+
+test('makes duplicate worker names actionable and allows correcting the name', async () => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => path === '/api/workers'
+    ? JSON.parse(String(options?.body)).name === worker.name
+      ? response({ detail: 'Worker name already exists' }, 409)
+      : response({ ...worker, name: 'another-worker', secret_api_key: 'new-key' })
+    : original(path, options))
+  await enterApp('/workers/new')
+  fillWorkerRegistration()
+  expect((await screen.findByRole('alert')).textContent).toContain('Choose a different name')
+  expect(screen.getByLabelText('Worker name').getAttribute('aria-invalid')).toBe('true')
+  expect((screen.getByLabelText('Supported types') as HTMLTextAreaElement).value).toContain('sum')
+  fireEvent.change(screen.getByLabelText('Worker name'), { target: { value: 'another-worker' } })
+  fireEvent.submit(screen.getByRole('form', { name: 'Register a worker' }))
+  expect(await screen.findByRole('heading', { name: 'another-worker registered' })).toBeTruthy()
+})
+
+test.each(['', '  ', 'add_numbers\n', 'a'.repeat(101)])('rejects invalid supported types %j before registration', async (types) => {
+  await enterApp('/workers/new')
+  fillWorkerRegistration(types)
+  expect(screen.getByRole('alert').textContent).toContain('one non-blank supported type per line')
+  expect(screen.queryByText(/registration may have succeeded/)).toBeNull()
+  expect(screen.getByLabelText('Supported types').getAttribute('aria-invalid')).toBe('true')
+  expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers')).toBe(false)
+})
+
+test('shows backend worker field validation errors inline', async () => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => path === '/api/workers'
+    ? response({ detail: [{ loc: ['body', 'supported_types', 0], msg: 'Unsupported value', type: 'value_error' }] }, 422)
+    : original(path, options))
+  await enterApp('/workers/new')
+  fillWorkerRegistration()
+  expect((await screen.findByRole('alert')).textContent).toContain('Unsupported value')
+  expect(screen.getByLabelText('Supported types').getAttribute('aria-invalid')).toBe('true')
+  expect(document.getElementById('worker-types-error')?.textContent).toBe('Unsupported value')
+  expect(screen.queryByText(/registration may have succeeded/)).toBeNull()
+})
+
+test('explains an uncertain registration without automatically retrying', async () => {
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => {
+    if (path === '/api/workers') throw new Error('private diagnostics')
+    return original(path, options)
+  })
+  await enterApp('/workers/new')
+  fillWorkerRegistration()
+  expect((await screen.findByRole('alert')).textContent).toContain('Unable to reach Orqbit')
+  expect(screen.getByText(/registration may have succeeded/)).toBeTruthy()
+  expect(fetchMock.mock.calls.filter(([path]) => path === '/api/workers')).toHaveLength(1)
+})
+
+test.each(['navigate', 'logout'])('prevents duplicate worker registration and cancels on %s', async (action) => {
+  const original = fetchMock.getMockImplementation()!
+  let resolve!: (value: Response) => void
+  fetchMock.mockImplementation(async (path, options) => path === '/api/workers'
+    ? new Promise((done) => { resolve = done }) : original(path, options))
+  await enterApp('/workers/new')
+  fillWorkerRegistration()
+  expect((screen.getByRole('button', { name: 'Registering…' }) as HTMLButtonElement).matches(':disabled')).toBe(true)
+  fireEvent.submit(screen.getByRole('form', { name: 'Register a worker' }))
+  expect(fetchMock.mock.calls.filter(([path]) => path === '/api/workers')).toHaveLength(1)
+  const signal = fetchMock.mock.calls.find(([path]) => path === '/api/workers')![1]?.signal
+  if (action === 'navigate') fireEvent.click(screen.getByRole('link', { name: 'Back to Workers' }))
+  else fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+  expect(signal?.aborted).toBe(true)
+  await act(async () => { resolve(response({ ...worker, secret_api_key: 'late-secret' })) })
+  expect(document.body.textContent).not.toContain('late-secret')
+  expect(screen.queryByLabelText('New worker API key')).toBeNull()
+})
+
+test('refreshes the owned worker list after registration', async () => {
+  const original = fetchMock.getMockImplementation()!
+  let registered = false
+  fetchMock.mockImplementation(async (path, options) => {
+    if (path === '/api/workers') {
+      registered = true
+      return response({ ...worker, secret_api_key: 'new-key' })
+    }
+    if (String(path).startsWith('/api/workers?')) return response(registered ? [worker] : [])
+    return original(path, options)
+  })
+  await enterApp('/workers')
+  await screen.findByText('You have no registered workers yet.')
+  fireEvent.click(screen.getByRole('link', { name: 'Register a worker' }))
+  fillWorkerRegistration()
+  await screen.findByLabelText('New worker API key')
+  fireEvent.click(screen.getByRole('link', { name: 'Back to Workers' }))
+  await screen.findByRole('link', { name: worker.name })
+  expect(screen.queryByLabelText('New worker API key')).toBeNull()
+})
+
+test('discards worker records across accounts', async () => {
+  await enterApp('/workers/17')
+  await screen.findByRole('region', { name: 'Worker metadata' })
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+  await screen.findByRole('heading', { name: 'Sign in' })
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation(async (path, options) => path === '/api/users/me/' ? response({ ...user, id: 888 }) : original(path, options))
+  fillLogin()
+  await screen.findByRole('heading', { name: 'Worker unavailable' })
+  expect(screen.queryByRole('region', { name: 'Worker metadata' })).toBeNull()
 })
 
 // Exercise the authenticated request boundary independently of feature screens.

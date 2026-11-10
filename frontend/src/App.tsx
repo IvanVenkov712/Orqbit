@@ -16,6 +16,7 @@ import { ApiError, apiRequest } from './api/client'
 import { AuthProvider, useAuth } from './auth'
 import { JobDetailsPage } from './JobDetailsPage'
 import { JobsPage } from './JobsPage'
+import { RegisterWorkerPage, WorkerDetailsPage, WorkersPage } from './WorkersPage'
 import { ParameterEditor, readParameters } from './ParameterEditor'
 import type { Parameter } from './ParameterEditor'
 import orqbitIcon from './assets/orqbit-icon.svg'
@@ -56,29 +57,6 @@ function AppLayout() {
         Orqbit · Asynchronous job processing
       </footer>
     </div>
-  )
-}
-
-function Placeholder({ title, description }: { title: string; description: string }) {
-  return (
-    <>
-      <div className={styles.pageHeading}>
-        <p className={styles.eyebrow}>Workspace</p>
-        <h1>{title}</h1>
-        <p>{description}</p>
-      </div>
-      <section className={styles.placeholder} aria-label={`${title} placeholder`}>
-        <p>Worker management is not available yet.</p>
-        <div className={styles.actions}>
-          {title === 'Jobs' && (
-            <Link className={styles.primaryLink} to="/jobs/new">Submit a job</Link>
-          )}
-          {title !== 'Jobs' && (
-            <Link className={styles.secondaryLink} to="/jobs">Back to Jobs</Link>
-          )}
-        </div>
-      </section>
-    </>
   )
 }
 
@@ -368,8 +346,9 @@ function App() {
               <Route path="jobs/new" element={<SubmitJobPage />} />
               <Route path="jobs/:jobId" element={<JobDetailsPage />} />
               <Route path="jobs/:jobId/attempts" element={<JobDetailsPage history />} />
-              <Route path="workers" element={<Placeholder title="Workers" description="A place to register and inspect independent workers." />} />
-              <Route path="workers/:workerId" element={<Placeholder title="Worker details" description="Inspect a worker's registration and supported job types." />} />
+              <Route path="workers" element={<WorkersPage />} />
+              <Route path="workers/new" element={<RegisterWorkerPage />} />
+              <Route path="workers/:workerId" element={<WorkerDetailsPage />} />
             </Route>
             <Route path="login" element={<AuthPage key="login" />} />
             <Route path="register" element={<AuthPage key="register" register />} />
