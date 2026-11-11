@@ -91,6 +91,8 @@ The backend uses **Python, FastAPI, PostgreSQL, SQLAlchemy, Pydantic, and Alembi
 | [Add numbers worker](examples/workers/add_numbers/README.md) | Basic job execution, configuration, and tests |
 | [Delay worker](examples/workers/delay/README.md) | Configurable delay without heartbeat |
 | [Delay with heartbeat](examples/workers/delay_with_heartbeat/README.md) | Long execution with lease renewal and ownership checks |
+| [Count primes worker](examples/workers/count_primes/README.md) | CPU computation in batches with cooperative heartbeat checks |
+| [CSV summary worker](examples/workers/csv_summary/README.md) | Numeric column statistics from CSV text |
 | [API reference](docs/api.md) | Authentication, permissions, requests, responses, and errors |
 | [Development](docs/development.md) | Local setup, repository layout, coordination details, migrations, and containers |
 | [Testing](docs/testing.md) | PostgreSQL integration tests and container verification |
