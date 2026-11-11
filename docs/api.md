@@ -12,7 +12,7 @@ This page describes the current unversioned prototype. `/docs` and `/openapi.jso
 | GET | `/users` | User bearer token | Optional `query`, `limit`, `offset`; returns active users' public profiles |
 | GET | `/users/{user_id}` | User bearer token | Returns an active user's public profile, or 404 |
 
-User requests use `Authorization: Bearer <access_token>`. Worker claim/outcome requests use `X-API-Key: <worker-api-key>`. Creating or viewing workers uses a user token. No credentials are needed for health routes.
+User requests use `Authorization: Bearer <access_token>`. Worker claim, heartbeat, and outcome requests use `X-API-Key: <worker-api-key>`. Creating or viewing workers uses a user token. No credentials are needed for health routes.
 
 Usernames and worker names contain 3?16 ASCII letters, digits, underscores, or hyphens. Email addresses are validated. Registration passwords contain 6?20 ASCII letters/digits or `@`, `$`, `#`, `%`, including at least one uppercase letter, lowercase letter, digit, and one of those symbols. User metadata contains `id`, `username`, `email`, `full_name`, `active`, and `role`; password hashes are not returned.
 
@@ -68,10 +68,11 @@ The response is a JSON array ordered by descending `attempt_number`. Pagination 
 | `job_type`, `params` | Job type and the attempt's JSON-object input |
 | `attempt_number` | Positive execution attempt number within the job |
 | `status` | `RUNNING`, `SUCCEEDED`, `FAILED`, or `LOST` |
+| `lease_expires_at` | Timezone-aware lease deadline in ISO 8601 format; also returned by claim and heartbeat |
 | `result`, `error` | Persisted JSON-object outcome fields, or null when absent |
 | `created_at`, `updated_at` | Timezone-aware creation and last-update timestamps in ISO 8601 format |
 
-Running attempts have null result and error; succeeded attempts carry a result, and failed attempts carry an error. `updated_at` records the last update, not a dedicated execution-finished timestamp. The schema includes `LOST`, but the API does not currently detect abandoned attempts or schedule retries. The `/workers/claim` response retains its existing fields; the additional history fields are returned only by this read endpoint.
+Running attempts have null result and error; succeeded attempts carry a result, and failed attempts carry an error. `updated_at` records the last update, including a persisted heartbeat renewal, not a dedicated execution-finished timestamp. Expiry does not automatically change persisted statuses to `LOST` or schedule retries. Historical terminal attempts migrated from before leases use `updated_at` as a synthetic lease deadline; see [migration notes](development.md#existing-databases).
 
 ### Permission policies
 
@@ -149,7 +150,7 @@ X-API-Key: <worker-api-key>
 
 Claim takes **no request body**. Job types come from the worker's stored capabilities; any supplied body, including the former `supported_types` field, is ignored. An empty compatible accessible queue returns **404**, `{"detail":"No jobs were found"}`. A worker with no stored types cannot claim work.
 
-A successful claim returns `id` (the attempt ID), `job_id`, `job_type`, `attempt_number` (currently 1), `status` (`RUNNING`), and `params`. PostgreSQL `FOR UPDATE SKIP LOCKED` selects the oldest eligible job by ID. The job update and attempt creation commit in one transaction before the response. An empty result can also mean eligible rows are temporarily locked by other claims.
+A successful claim returns `id` (the attempt ID), `job_id`, `job_type`, `attempt_number` (currently 1), `status` (`RUNNING`), `params`, and `lease_expires_at`. PostgreSQL `FOR UPDATE SKIP LOCKED` selects the oldest eligible job by ID. The initial deadline is database time plus `LEASE_SECONDS` (example configuration: 120 seconds). The job update and attempt creation commit in one transaction before the response. An empty result can also mean eligible rows are temporarily locked by other claims.
 
 The worker executes outside Orqbit, then sends one outcome:
 
@@ -158,7 +159,30 @@ The worker executes outside Orqbit, then sends one outcome:
 | POST | `/workers/{attempt_id}/succeed` | `{"result":{"message_id":"example-message-id"}}` | `{"Status":"200 OK"}` |
 | POST | `/workers/{attempt_id}/fail` | `{"error":{"code":"DELIVERY_FAILED","message":"Provider failure"}}` | `{"Status":"200 OK"}` |
 
-Both routes require the owning worker's API key. Use the returned attempt ID, not the job ID. Result/error must be JSON objects. The attempt is locked and checked for ownership. A first outcome requires `RUNNING` status and updates the attempt together with its job. Repeating the accepted outcome with the same payload returns 200, `{"Status":"200 OK"}`, without changing stored values or timestamps. JSON object key order does not affect matching, and equivalent numeric representations such as `1` and `1.0` match; array order and boolean versus numeric values do affect matching. Changed payloads, contradictory outcomes, and reports against lost attempts return 409. No extra idempotency header is required. Success/failure are alternative terminal outcomes; failure does not schedule a retry. There is no API operation that renews a lease, expires an abandoned attempt, or requeues it.
+Both routes require the owning worker's API key. Use the returned attempt ID, not the job ID. Result/error must be JSON objects. The attempt is locked and checked for ownership. A first outcome requires `RUNNING` status and an unexpired lease, and updates the attempt together with its job. Repeating the accepted outcome with the same payload returns 200, `{"Status":"200 OK"}`, even after the recorded lease deadline, without changing stored values or timestamps. JSON object key order does not affect matching, and equivalent numeric representations such as `1` and `1.0` match; array order and boolean versus numeric values do affect matching. Changed payloads, contradictory outcomes, and reports against lost attempts return 409. No extra idempotency header is required. Success/failure are alternative terminal outcomes; failure does not schedule a retry. There is no API operation that automatically closes an expired attempt or requeues it.
+
+### Attempt heartbeats and leases
+
+While executing, the owning worker can renew its attempt with a bodyless request:
+
+```http
+POST /workers/{attempt_id}/heartbeat HTTP/1.1
+X-API-Key: <worker-api-key>
+```
+
+A successful heartbeat returns HTTP 200 with the persisted deadline, for example:
+
+```json
+{"lease_expires_at":"2026-11-11T15:20:00Z"}
+```
+
+The request must target an owned `RUNNING` attempt whose lease has not expired. The server locks the attempt, then reads PostgreSQL `clock_timestamp()` to check expiry and calculate renewal within the same transaction. Success/failure checks use the same locking and database-time rule. A lease is expired when database time is greater than or equal to `lease_expires_at`.
+
+Renewal sets the deadline to `max(existing_deadline, database_now + LEASE_EXTENSION_SECONDS)`. The example configuration uses a 60-second renewal window. This gives time from the heartbeat's processing time; it does not add 60 seconds to the previous deadline. An early heartbeat cannot shorten an existing lease. Choose a heartbeat interval with enough margin below the renewal window for requests and processing delays. Use the deadline returned by each successful response. An expired lease cannot be revived by retrying a heartbeat.
+
+This is a per-attempt heartbeat, not a separate worker-process liveness signal. It renews only the addressed attempt. The [example worker](example-worker.md) does not send heartbeats and must finish within its initial lease.
+
+Expiry currently blocks new outcomes and renewals but leaves both job and attempt persisted as `RUNNING`. There is no recovery process, automatic `LOST` transition, retry, or reassignment. A crashed worker or lost claim response can therefore leave a job stuck indefinitely. Workers should stop work cooperatively after losing their lease; lease validation cannot undo external side effects already performed. Hard execution deadlines are not implemented, so successful heartbeats can keep a running attempt leased indefinitely.
 
 ## Errors
 
@@ -174,6 +198,8 @@ Errors use a top-level `detail` field. Request validation returns an array conta
 | Missing/inaccessible worker | 404, `Worker not found` |
 | Empty claim result | 404, `No jobs were found` |
 | Missing attempt or another worker's attempt | 404, `Attempt not found` |
+| Expired lease on a running attempt, for heartbeat or a first outcome | 400, `The lease has expired` |
+| Heartbeat against a terminal attempt | 400, `The attempt is not running` |
 | Changed or contradictory outcome, or report against a lost attempt | 409, `Conflicting outcome report` |
 | Duplicate username/email | 400, `User with username ... already exists` or `User with email ... already exists` |
 | Duplicate worker name | 409, `Worker name already exists` |

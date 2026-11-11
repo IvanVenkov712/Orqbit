@@ -4,6 +4,8 @@ The [example worker](../examples/workers/add_numbers/worker.py) is a standalone 
 
 It claims jobs, sums `params.numbers`, and reports a result such as `{"sum":10}` for `{"numbers":[2,3,5]}`. It accepts integers and finite decimal numbers, rejects booleans and strings, and returns zero for an empty list. Invalid parameters are reported as failed attempts.
 
+This example does not send attempt heartbeats. Execution and outcome reporting must finish before the initial lease expires (`LEASE_SECONDS=120` in the API example configuration). For longer handlers, implement the [heartbeat protocol](api.md#attempt-heartbeats-and-leases) through the public API. A new outcome after expiry returns HTTP 400, `The lease has expired`, which stops this example worker; expiry does not recover or requeue the job.
+
 ## Register and configure
 
 Start the API and register/log in a user using the [quickstart](quickstart.md). In `/docs`, authorize with that user's bearer token and create a worker with `POST /workers`:

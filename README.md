@@ -25,7 +25,7 @@ The project also explores how far a focused HTTP API and PostgreSQL can take job
 1. **Submit a job.** An authenticated client provides a job type, JSON parameters, and an access policy.
 2. **Keep it in the queue.** Orqbit persists the job so its status can be queried independently of the original request.
 3. **Claim compatible work.** A registered worker requests a job matching its declared capabilities and permissions. Concurrent workers can claim different jobs safely.
-4. **Execute independently.** The worker performs the task outside the API process and reports the outcome for its assigned execution attempt.
+4. **Execute independently.** The worker performs the task outside the API process, renews its attempt lease as needed, and reports the outcome before the lease expires.
 5. **Retrieve the outcome.** The client reads the job's status and, when available, its result or error.
 
 ```text
@@ -42,6 +42,7 @@ For example, the included `add_numbers` worker turns `{"numbers":[2,3,5]}` into 
 - **Capability-based dispatch.** Workers declare the job types they support and pull compatible work when ready.
 - **Concurrent claiming.** Atomic claims coordinate access to pending jobs so competing workers do not receive the same job simultaneously.
 - **Owned outcome reporting.** Only the worker assigned to an attempt can report its success or failure; exact replays of accepted reports are safe.
+- **Execution leases and attempt heartbeats.** Workers can renew an owned running attempt through the API. Expired leases reject new outcomes; automatic recovery remains planned. See the [lease protocol](docs/api.md#attempt-heartbeats-and-leases).
 - **Authentication and access policies.** User authentication, individual worker API keys, and permission-aware access control who can view or claim work.
 - **Searchable job and worker lists.** Filter and paginate records to find relevant work and registered workers.
 - **Persistent execution records.** PostgreSQL stores job parameters, attempt ownership, timestamps, and outcomes. An authorized, paginated history endpoint exposes attempt details.
@@ -67,7 +68,7 @@ It is particularly useful when the application needs a persistent record of subm
 
 The next areas of development build on the existing submission, claiming, and reporting flow:
 
-- **Worker heartbeats and execution leases** to detect abandoned work and support recovery after worker failures.
+- **Worker process liveness and lease recovery** to detect abandoned work and recover after worker failures, building on the implemented per-attempt leases and heartbeats.
 - **Retry policies with backoff** to handle transient failures with explicit attempt limits.
 - **Operational visibility** through metrics, structured logs, and tools for diagnosing stalled or failed work.
 - **Additional job controls and integrations**, such as cancellation, scheduling, priorities, and completion webhooks, as their requirements take shape.

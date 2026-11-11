@@ -26,7 +26,7 @@ $rng.Dispose()
 -join ($keyBytes | ForEach-Object { $_.ToString("x2") })
 ```
 
-Replace `SECRET_KEY=replace_with_secret_key` in `.env.compose` with that output. It must be 64 lowercase hexadecimal characters. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES` (the example uses 30). The lease settings must be positive but currently enable no lease or heartbeat behavior. The real environment file is ignored by Git and excluded from the image.
+Replace `SECRET_KEY=replace_with_secret_key` in `.env.compose` with that output. It must be 64 lowercase hexadecimal characters. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES` (the example uses 30). Keep positive `LEASE_SECONDS=120` for the initial attempt lease and `LEASE_EXTENSION_SECONDS=60` for the heartbeat renewal window. In existing files, rename `PROTRACTION_SECONDS` to `LEASE_EXTENSION_SECONDS`; Compose no longer reads the old name. See the [lease protocol](api.md#attempt-heartbeats-and-leases) for expiry and renewal behavior. The real environment file is ignored by Git and excluded from the image.
 
 Set the URL to match `API_PORT` in the file, then validate Compose interpolation:
 

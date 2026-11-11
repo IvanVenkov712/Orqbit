@@ -6,7 +6,7 @@ This roadmap contains remaining work only. The [status page](status.md) records 
 | --- | --- |
 | Identity and access management | Separate process identity, credential rotation/revocation management, and tenant-isolation requirements |
 | Coordination hardening | Competing outcome-report regression tests and API-query timeout policy |
-| Heartbeats, deadlines, recovery | Planned |
+| Heartbeats, deadlines, recovery | Worker-process liveness, hard deadlines, recovery, and example-worker heartbeat support |
 | Retries and history extensions | Retry scheduling, retry-exhaustion filtering, timeout reasons, and durations |
 | Operations | Metrics, resource limits, load tests, backup/restore, and retention policies |
 
@@ -24,9 +24,9 @@ Add competing success/failure report regression tests and define a deliberate AP
 
 ## 3. Heartbeats, deadlines, and crash recovery
 
-Define the lease/fencing contract, then add worker liveness, per-attempt lease renewal, hard attempt deadlines, and an independently runnable recovery process. Make recovery safe across multiple instances. Add graceful worker draining and extend the existing example worker to demonstrate the protocol and cooperative lease-loss handling.
+Build on the implemented per-attempt leases, authenticated renewal, and rejection of expired heartbeats/outcomes. Add worker-process liveness, process-instance fencing, hard attempt deadlines, and an independently runnable recovery process. Make recovery safe across multiple instances. Add graceful worker draining and extend the existing example worker to demonstrate heartbeats and cooperative lease-loss handling.
 
-**Done when:** killing a worker, dropping its network connection, or restarting API/recovery processes leaves no permanently orphaned job; stale acknowledgements and late heartbeats are rejected. Test heartbeat/expiry races. Recovery latency and oldest expired-lease age are observable.
+**Done when:** killing a worker, dropping its network connection, or restarting API/recovery processes leaves no permanently orphaned job; stale acknowledgements and late heartbeats are rejected. Extend the existing heartbeat/outcome and expiry-after-lock tests to cover races with recovery and reassignment. Recovery latency and oldest expired-lease age are observable.
 
 ## 4. Retry policy and history extensions
 
