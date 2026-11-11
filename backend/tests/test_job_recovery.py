@@ -7,7 +7,15 @@ from time import monotonic
 from uuid import uuid4
 
 import pytest
+from psycopg import OperationalError as PsycopgOperationalError
+from psycopg.errors import (
+    AdminShutdown,
+    DeadlockDetected,
+    InvalidPassword,
+    UndefinedTable,
+)
 from sqlalchemy import event, func, select
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from models.job import Job, JobStatus
@@ -163,6 +171,95 @@ def test_recovery_failure_rolls_back_attempt_and_job(database, claimed_attempt):
             before_attempt
         )
         assert session.execute(select(Job.__table__)).mappings().one() == before_job
+
+
+@pytest.mark.parametrize(
+    "database_error", [PsycopgOperationalError, DeadlockDetected, AdminShutdown]
+)
+def test_recovery_runner_retries_with_rollback_and_new_session(
+    database, claimed_attempt, monkeypatch, caplog, database_error
+):
+    import recovery
+
+    claim, _ = claimed_attempt
+    with Session(database) as session:
+        now = session.scalar(select(func.clock_timestamp()))
+        session.get(JobAttempt, claim["id"]).lease_expires_at = now - timedelta(days=1)
+        session.commit()
+        before_attempt = session.execute(select(JobAttempt.__table__)).mappings().one()
+        before_job = session.execute(select(Job.__table__)).mappings().one()
+
+    sessions, pauses = [], []
+
+    def session_factory():
+        session = Session(database)
+        sessions.append(session)
+        return session
+
+    def reject_first_job_update(
+        connection, cursor, statement, parameters, context, executemany
+    ):
+        if len(sessions) == 1 and statement.startswith("UPDATE jobs SET"):
+            raise OperationalError(statement, parameters, database_error("Unavailable"))
+
+    def pause(seconds):
+        pauses.append(seconds)
+        assert not sessions[-1].in_transaction()
+        with Session(database) as session:
+            if len(pauses) == 1:
+                assert session.execute(
+                    select(JobAttempt.__table__)
+                ).mappings().one() == (before_attempt)
+                assert (
+                    session.execute(select(Job.__table__)).mappings().one()
+                    == before_job
+                )
+                return
+            assert session.get(JobAttempt, claim["id"]).status == AttemptStatus.LOST
+            assert session.get(Job, claim["job_id"]).status == JobStatus.FAILED
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(recovery, "SessionLocal", session_factory)
+    monkeypatch.setattr(recovery, "sleep", pause)
+    event.listen(database, "before_cursor_execute", reject_first_job_update)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            recovery.main()
+    finally:
+        event.remove(database, "before_cursor_execute", reject_first_job_update)
+
+    assert len(sessions) == 2 and sessions[0] is not sessions[1]
+    assert pauses == [recovery.settings.recovery_interval_seconds] * 2
+    records = [record for record in caplog.records if record.name == "recovery"]
+    assert len(records) == 1
+    assert records[0].levelname == "ERROR"
+    assert isinstance(records[0].exc_info[1], OperationalError)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("Unexpected recovery failure"),
+        ProgrammingError(None, None, UndefinedTable("Missing migration")),
+        OperationalError(None, None, InvalidPassword("Invalid credentials")),
+    ],
+)
+def test_recovery_runner_does_not_retry_permanent_errors(database, monkeypatch, error):
+    import recovery
+
+    def fail_scan(session):
+        raise error
+
+    def unexpected_pause(seconds):
+        pytest.fail("A permanent error must stop recovery without retrying")
+
+    monkeypatch.setattr(recovery, "SessionLocal", lambda: Session(database))
+    monkeypatch.setattr(recovery, "recover_expired_attempts", fail_scan)
+    monkeypatch.setattr(recovery, "sleep", unexpected_pause)
+
+    with pytest.raises(type(error)) as raised:
+        recovery.main()
+    assert raised.value is error
 
 
 @pytest.mark.parametrize(
