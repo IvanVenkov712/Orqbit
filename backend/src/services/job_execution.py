@@ -1,7 +1,7 @@
 """Claim jobs and record worker-reported outcomes."""
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -77,11 +77,14 @@ def get_attempt(
 
     return attempt
 
+def get_db_now(session: Session):
+    return session.execute(select(func.clock_timestamp())).scalar_one()
+
 def validate_not_expired(
         session: Session,
         attempt: JobAttempt,
 ):
-    now = session.execute(select(func.clock_timestamp())).scalar_one()
+    now = get_db_now(session)
 
     if attempt.lease_expires_at <= now:
         raise LeaseExpired("The lease has expired")
@@ -150,4 +153,31 @@ def send_heartbeat(
     )
     session.commit()
     return attempt.lease_expires_at
+
+def recover_expired_attempts(session: Session):
+    now = get_db_now(session)
+    stmt = (
+        update(JobAttempt)
+        .where(
+            JobAttempt.status == AttemptStatus.RUNNING,
+            JobAttempt.lease_expires_at <= now,
+
+        )
+        .values(status=AttemptStatus.LOST)
+    ).returning(JobAttempt.job_id)
+
+    job_ids = session.scalars(stmt)
+
+    stmt = (
+        update(Job)
+        .where(
+            Job.id.in_(job_ids),
+            Job.status == JobStatus.RUNNING
+        )
+        .values(status=JobStatus.FAILED)
+    )
+    session.execute(stmt)
+
+    session.commit()
+
 
