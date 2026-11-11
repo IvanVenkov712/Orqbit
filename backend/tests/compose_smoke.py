@@ -34,7 +34,7 @@ def main() -> None:
             f"postgresql+psycopg://orqbit_smoke:{password}@db:5432/orqbit_smoke"
         ),
         "LEASE_SECONDS": "120",
-        "PROTRACTION_SECONDS": "60",
+        "LEASE_EXTENSION_SECONDS": "60",
         "SECRET_KEY": secrets.token_hex(32),
         "ALGORITHM": "HS256",
         "ACCESS_TOKEN_EXPIRE_MINUTES": "30",

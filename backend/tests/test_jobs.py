@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from threading import Barrier
+from threading import Barrier, Event
+from time import monotonic
 from uuid import uuid4
 
 import pytest
@@ -506,8 +507,19 @@ def test_claim_openapi_has_no_request_body(client):
     [("succeed", "result", "SUCCEEDED"), ("fail", "error", "FAILED")],
 )
 def test_claim_and_report_outcome(
-    client, database, user_headers, claim_worker, endpoint, field, status
+    client, database, user_headers, claim_worker, monkeypatch, endpoint, field, status
 ):
+    import models.job_attempts as attempt_model
+    from config import settings
+
+    class SkewedClock:
+        @staticmethod
+        def now(tz):
+            return datetime(2099, 1, 1, tzinfo=tz)
+
+    # Claim deadlines must not depend on the model's local-clock fallback.
+    monkeypatch.setattr(attempt_model, "datetime", SkewedClock)
+
     worker, headers = claim_worker
     response = client.post(
         "/jobs/",
@@ -525,7 +537,11 @@ def test_claim_and_report_outcome(
         job.updated_at = old_time
         session.commit()
 
+    with database.connect() as connection:
+        before_claim = connection.scalar(select(func.clock_timestamp()))
     response = client.post("/workers/claim", headers=headers)
+    with database.connect() as connection:
+        after_claim = connection.scalar(select(func.clock_timestamp()))
     assert response.status_code == 200
     attempt_id = response.json()["id"]
     assert response.json()["job_id"] == job_id
@@ -539,7 +555,16 @@ def test_claim_and_report_outcome(
         "attempt_number",
         "status",
         "params",
+        "lease_expires_at",
     }
+    initial_deadline = datetime.fromisoformat(response.json()["lease_expires_at"])
+    lease_duration = timedelta(seconds=settings.lease_seconds)
+    assert initial_deadline.utcoffset() == timedelta(0)
+    assert (
+        before_claim + lease_duration
+        <= initial_deadline
+        <= after_claim + lease_duration
+    )
     response = client.get(f"/jobs/{job_id}/attempts", headers=user_headers)
     assert response.status_code == 200
     assert len(response.json()) == 1
@@ -548,6 +573,7 @@ def test_claim_and_report_outcome(
     assert running["status"] == "RUNNING"
     assert running["result"] is None
     assert running["error"] is None
+    assert datetime.fromisoformat(running["lease_expires_at"]) == initial_deadline
     with Session(database) as session:
         job = session.get(Job, job_id)
         assert job.created_at == old_time
@@ -579,6 +605,7 @@ def test_claim_and_report_outcome(
         assert job.updated_at > old_time
         assert job.updated_at.utcoffset() == timedelta(0)
         attempt = session.get(JobAttempt, attempt_id)
+        assert attempt.lease_expires_at == initial_deadline
         assert attempt.worker_id == worker.id
         assert attempt.status == AttemptStatus(status)
         assert getattr(attempt, field) == outcome
@@ -603,6 +630,7 @@ def test_claim_and_report_outcome(
         "error",
         "created_at",
         "updated_at",
+        "lease_expires_at",
     }
     assert history["id"] == attempt_id
     assert history["job_id"] == job_id
@@ -615,6 +643,7 @@ def test_claim_and_report_outcome(
     assert history[other_field] is None
     assert datetime.fromisoformat(history["created_at"]) == attempt.created_at
     assert datetime.fromisoformat(history["updated_at"]) == attempt_updated_at
+    assert datetime.fromisoformat(history["lease_expires_at"]) == initial_deadline
 
     response = client.post(
         f"/workers/{attempt_id}/{endpoint}", headers=headers, json={field: outcome}
@@ -689,6 +718,7 @@ def test_terminal_attempt_outcome_replays_or_conflicts(
             result=result,
             error=error,
             updated_at=old_time,
+            lease_expires_at=old_time,
         )
         session.add(attempt)
         session.commit()
@@ -723,6 +753,7 @@ def test_terminal_attempt_outcome_replays_or_conflicts(
         assert attempt.result == result
         assert attempt.error == error
         assert attempt.updated_at == old_time
+        assert attempt.lease_expires_at == old_time
 
 
 @pytest.mark.parametrize("path", ["/jobs/", "/jobs", "/jobs/0", "/jobs/0/attempts"])
@@ -940,7 +971,7 @@ def test_list_jobs_orders_by_status_and_update_time_before_pagination(
             params={**params, "limit": 2, "offset": offset},
         )
         assert response.status_code == 200
-        assert [job["id"] for job in response.json()] == expected[offset:offset + 2]
+        assert [job["id"] for job in response.json()] == expected[offset : offset + 2]
 
     response = client.get(
         "/jobs", headers=user_headers, params={**params, "status": "PENDING"}
@@ -1170,3 +1201,326 @@ def test_worker_supported_types_use_job_type_rules(
         assert len(workers) == int(expected_status == 200)
         if workers:
             assert [item.type_name for item in workers[0].supported_types] == [job_type]
+
+
+@pytest.fixture
+def claimed_attempt(client, database, claim_worker):
+    worker, headers = claim_worker
+    with Session(database) as session:
+        session.add(
+            Job(
+                job_type="example",
+                params={"input": True},
+                user_id=worker.user_id,
+                idempotency_key="lease-test",
+                request_fingerprint="test-fingerprint",
+            )
+        )
+        session.commit()
+    response = client.post("/workers/claim", headers=headers)
+    assert response.status_code == 200
+    return response.json(), headers
+
+
+@pytest.mark.parametrize("extends", [True, False], ids=["extends", "does-not-shorten"])
+def test_heartbeat_renews_lease_without_changing_job(
+    client, database, claimed_attempt, monkeypatch, extends
+):
+    from config import settings
+
+    claim, headers = claimed_attempt
+    # Hours leave ample headroom without making the test wait for real expiry.
+    monkeypatch.setattr(settings, "lease_extension_seconds", 7200)
+    with Session(database) as session:
+        now = session.scalar(select(func.clock_timestamp()))
+        attempt = session.get(JobAttempt, claim["id"])
+        attempt.lease_expires_at = now + timedelta(hours=1 if extends else 3)
+        session.commit()
+        original_deadline = attempt.lease_expires_at
+        original_job = session.execute(select(Job.__table__)).mappings().one()
+
+    with database.connect() as connection:
+        before = connection.scalar(select(func.clock_timestamp()))
+    response = client.post(f"/workers/{claim['id']}/heartbeat", headers=headers)
+    with database.connect() as connection:
+        after = connection.scalar(select(func.clock_timestamp()))
+
+    assert response.status_code == 200
+    assert set(response.json()) == {"lease_expires_at"}
+    renewed = datetime.fromisoformat(response.json()["lease_expires_at"])
+    assert renewed.utcoffset() == timedelta(0)
+    if extends:
+        assert renewed > original_deadline
+        assert before + timedelta(hours=2) <= renewed <= after + timedelta(hours=2)
+    else:
+        assert renewed == original_deadline
+    with Session(database) as session:
+        attempt = session.get(JobAttempt, claim["id"])
+        assert attempt.lease_expires_at == renewed
+        assert attempt.status == AttemptStatus.RUNNING
+        assert attempt.params == claim["params"]
+        assert attempt.result is None
+        assert attempt.error is None
+        assert session.execute(select(Job.__table__)).mappings().one() == original_job
+
+
+@pytest.mark.parametrize("endpoint", ["heartbeat", "succeed", "fail"])
+def test_expired_lease_rejects_new_reports_without_mutation(
+    client, database, claimed_attempt, endpoint
+):
+    claim, headers = claimed_attempt
+    with Session(database) as session:
+        now = session.scalar(select(func.clock_timestamp()))
+        session.get(JobAttempt, claim["id"]).lease_expires_at = now - timedelta(days=1)
+        session.commit()
+        original_attempt = (
+            session.execute(select(JobAttempt.__table__)).mappings().one()
+        )
+        original_job = session.execute(select(Job.__table__)).mappings().one()
+
+    payload = (
+        {}
+        if endpoint == "heartbeat"
+        else {"json": {"result" if endpoint == "succeed" else "error": {"value": 3}}}
+    )
+    response = client.post(
+        f"/workers/{claim['id']}/{endpoint}", headers=headers, **payload
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "The lease has expired"}
+    with Session(database) as session:
+        assert (
+            session.execute(select(JobAttempt.__table__)).mappings().one()
+            == original_attempt
+        )
+        assert session.execute(select(Job.__table__)).mappings().one() == original_job
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("missing", 404),
+        ("other-worker", 404),
+        ("no-key", 401),
+        ("SUCCEEDED", 400),
+        ("FAILED", 400),
+        ("LOST", 400),
+    ],
+)
+def test_heartbeat_requires_owner_and_running_attempt(
+    client, database, claimed_attempt, worker_factory, target, expected
+):
+    claim, headers = claimed_attempt
+    target_id = claim["id"]
+    if target == "missing":
+        target_id = 0
+    elif target == "other-worker":
+        _, headers = worker_factory()
+    elif target == "no-key":
+        headers = {}
+    else:
+        with Session(database) as session:
+            attempt = session.get(JobAttempt, claim["id"])
+            attempt.status = AttemptStatus(target)
+            attempt.job.status = (
+                JobStatus.FAILED if target == "LOST" else JobStatus(target)
+            )
+            session.commit()
+
+    with Session(database) as session:
+        original = session.execute(select(JobAttempt.__table__)).mappings().one()
+    response = client.post(f"/workers/{target_id}/heartbeat", headers=headers)
+    assert response.status_code == expected
+    if expected == 404:
+        assert response.json() == {"detail": "Attempt not found"}
+    elif expected == 400:
+        assert response.json() == {"detail": "The attempt is not running"}
+    with Session(database) as session:
+        assert (
+            session.execute(select(JobAttempt.__table__)).mappings().one() == original
+        )
+
+
+@pytest.mark.parametrize("endpoint", ["succeed", "fail"])
+@pytest.mark.parametrize("heartbeat_first", [True, False])
+def test_concurrent_heartbeat_and_outcome_serialize_on_attempt(
+    client, database, claimed_attempt, monkeypatch, endpoint, heartbeat_first
+):
+    from config import settings
+    from database import engine as api_engine
+    from main import app
+
+    claim, headers = claimed_attempt
+    monkeypatch.setattr(settings, "lease_extension_seconds", 7200)
+    with Session(database) as session:
+        now = session.scalar(select(func.clock_timestamp()))
+        session.get(JobAttempt, claim["id"]).lease_expires_at = now + timedelta(hours=1)
+        session.commit()
+        original_deadline = session.get(JobAttempt, claim["id"]).lease_expires_at
+
+    locked, release, waiting = Event(), Event(), Event()
+    first_pid, waiting_pid = [], []
+
+    def hold_first_update(session, flush_context):
+        if not locked.is_set() and any(
+            isinstance(record, JobAttempt) and record.id == claim["id"]
+            for record in session.dirty
+        ):
+            first_pid.append(
+                session.connection().connection.driver_connection.info.backend_pid
+            )
+            locked.set()
+            assert release.wait(timeout=20), "First update was never released"
+
+    def observe_waiter(connection, cursor, statement, parameters, context, executemany):
+        if (
+            locked.is_set()
+            and "FROM job_attempts" in statement
+            and "FOR UPDATE" in statement
+        ):
+            waiting_pid.append(connection.connection.driver_connection.info.backend_pid)
+            waiting.set()
+
+    field = "result" if endpoint == "succeed" else "error"
+    requests = {"heartbeat": {}, endpoint: {"json": {field: {"value": 3}}}}
+    first_endpoint, second_endpoint = (
+        ("heartbeat", endpoint) if heartbeat_first else (endpoint, "heartbeat")
+    )
+    with TestClient(app) as other_client, ThreadPoolExecutor(max_workers=2) as executor:
+        event.listen(Session, "after_flush", hold_first_update)
+        event.listen(api_engine, "before_cursor_execute", observe_waiter)
+        try:
+            first_future = executor.submit(
+                client.post,
+                f"/workers/{claim['id']}/{first_endpoint}",
+                headers=headers,
+                **requests[first_endpoint],
+            )
+            try:
+                assert locked.wait(timeout=10), "First update never reached PostgreSQL"
+                second_future = executor.submit(
+                    other_client.post,
+                    f"/workers/{claim['id']}/{second_endpoint}",
+                    headers=headers,
+                    **requests[second_endpoint],
+                )
+                assert waiting.wait(timeout=10), (
+                    "Second request never attempted its lock"
+                )
+                # Verify actual server-side blocking before releasing the first request.
+                with database.connect() as connection:
+                    deadline = monotonic() + 10
+                    while monotonic() < deadline:
+                        blockers = connection.scalar(
+                            select(func.pg_blocking_pids(waiting_pid[0]))
+                        )
+                        if first_pid[0] in blockers:
+                            break
+                    else:
+                        pytest.fail(
+                            "Second request did not wait for the first attempt lock"
+                        )
+                assert not second_future.done()
+            finally:
+                release.set()
+            first = first_future.result(timeout=10)
+            second = second_future.result(timeout=10)
+        finally:
+            release.set()
+            executor.shutdown(wait=True)
+            event.remove(Session, "after_flush", hold_first_update)
+            event.remove(api_engine, "before_cursor_execute", observe_waiter)
+
+    assert first.status_code == 200
+    assert second.status_code == (200 if heartbeat_first else 400)
+    if not heartbeat_first:
+        assert second.json() == {"detail": "The attempt is not running"}
+    with Session(database) as session:
+        attempt = session.get(JobAttempt, claim["id"])
+        status = "SUCCEEDED" if endpoint == "succeed" else "FAILED"
+        assert attempt.status == AttemptStatus(status)
+        assert attempt.job.status == JobStatus(status)
+        assert getattr(attempt, field) == getattr(attempt.job, field) == {"value": 3}
+        if heartbeat_first:
+            assert attempt.lease_expires_at > original_deadline
+            assert attempt.lease_expires_at == datetime.fromisoformat(
+                first.json()["lease_expires_at"]
+            )
+        else:
+            assert attempt.lease_expires_at == original_deadline
+
+
+@pytest.mark.parametrize("endpoint", ["heartbeat", "succeed", "fail"])
+def test_waiting_report_rechecks_expiry_after_acquiring_attempt_lock(
+    client, database, claimed_attempt, endpoint
+):
+    from database import engine as api_engine
+    from main import app
+
+    claim, headers = claimed_attempt
+    waiting = Event()
+    waiting_pid = []
+
+    def observe_waiter(connection, cursor, statement, parameters, context, executemany):
+        if "FROM job_attempts" in statement and "FOR UPDATE" in statement:
+            waiting_pid.append(connection.connection.driver_connection.info.backend_pid)
+            waiting.set()
+
+    payload = (
+        {}
+        if endpoint == "heartbeat"
+        else {"json": {"result" if endpoint == "succeed" else "error": {"value": 3}}}
+    )
+    with (
+        Session(database) as owner,
+        TestClient(app) as other_client,
+        ThreadPoolExecutor(max_workers=1) as executor,
+    ):
+        attempt = owner.scalar(
+            select(JobAttempt).where(JobAttempt.id == claim["id"]).with_for_update()
+        )
+        owner_pid = owner.connection().connection.driver_connection.info.backend_pid
+        event.listen(api_engine, "before_cursor_execute", observe_waiter)
+        try:
+            future = executor.submit(
+                other_client.post,
+                f"/workers/{claim['id']}/{endpoint}",
+                headers=headers,
+                **payload,
+            )
+            try:
+                assert waiting.wait(timeout=10), "Request never attempted its lock"
+                with database.connect() as connection:
+                    deadline = monotonic() + 10
+                    while monotonic() < deadline:
+                        blockers = connection.scalar(
+                            select(func.pg_blocking_pids(waiting_pid[0]))
+                        )
+                        if owner_pid in blockers:
+                            break
+                    else:
+                        pytest.fail("Request did not wait for the held attempt lock")
+
+                # This instant is later than the waiting request's transaction start.
+                # Using transaction_timestamp()/now() after the lock would be stale.
+                expired_deadline = owner.scalar(select(func.clock_timestamp()))
+                attempt.lease_expires_at = expired_deadline
+                owner.commit()
+                response = future.result(timeout=10)
+            finally:
+                owner.rollback()
+        finally:
+            owner.rollback()
+            executor.shutdown(wait=True)
+            event.remove(api_engine, "before_cursor_execute", observe_waiter)
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "The lease has expired"}
+    with Session(database) as session:
+        attempt = session.get(JobAttempt, claim["id"])
+        assert attempt.lease_expires_at == expired_deadline
+        assert attempt.status == AttemptStatus.RUNNING
+        assert attempt.job.status == JobStatus.RUNNING
+        assert attempt.result is None and attempt.job.result is None
+        assert attempt.error is None and attempt.job.error is None
