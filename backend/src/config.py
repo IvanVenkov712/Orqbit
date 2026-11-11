@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     secret_key: str = Field(pattern=r"^[0-9a-f]{64}$")
     algorithm: str
     access_token_expire_minutes: PositiveInt
+    recovery_interval_seconds: PositiveInt
 
     @field_validator("database_url")
     @classmethod
