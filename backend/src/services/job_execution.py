@@ -1,10 +1,10 @@
 """Claim jobs and record worker-reported outcomes."""
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from config import Settings, settings
+from config import settings
 from dto.claims import CompleteJob, FailJob
 from models.job import Job, JobStatus
 from models.job_attempts import AttemptStatus, JobAttempt
@@ -50,12 +50,15 @@ def claim_job(session: Session, worker: Worker) -> JobAttempt:
     if job is None:
         raise NoJobAvailable("No jobs were found")
 
+    now = session.execute(select(func.clock_timestamp())).scalar_one()
+
     job.status = JobStatus.RUNNING
     attempt = JobAttempt(
         attempt_number=1,
         job=job,
         worker=worker,
         params=job.params,
+        lease_expires_at=now + timedelta(seconds=settings.lease_seconds),
     )
     session.add(attempt)
     session.commit()
@@ -74,8 +77,16 @@ def get_attempt(
 
     return attempt
 
-def validate_not_expired(attempt: JobAttempt):
-    
+def validate_not_expired(
+        session: Session,
+        attempt: JobAttempt,
+):
+    now = session.execute(select(func.clock_timestamp())).scalar_one()
+
+    if attempt.lease_expires_at <= now:
+        raise LeaseExpired("The lease has expired")
+
+    return now
 
 
 def complete_job(
@@ -90,6 +101,8 @@ def complete_job(
 
     if attempt.status != AttemptStatus.RUNNING:
         raise OutcomeConflict("Conflicting outcome report")
+
+    validate_not_expired(session, attempt)
 
     attempt.status = AttemptStatus.SUCCEEDED
     attempt.result = payload.result
@@ -112,6 +125,8 @@ def fail_job(
     if attempt.status != AttemptStatus.RUNNING:
         raise OutcomeConflict("Conflicting outcome report")
 
+    validate_not_expired(session, attempt)
+
     attempt.status = AttemptStatus.FAILED
     attempt.error = payload.error
     job = attempt.job
@@ -126,9 +141,13 @@ def send_heartbeat(
     attempt = get_attempt(session, worker, attempt_id)
     if attempt.status != AttemptStatus.RUNNING:
         raise AttemptNotRunning("The attempt is not running")
+
+    now = validate_not_expired(session, attempt)
     
-    attempt.lease_expires_at = (datetime.now(UTC)
-                                + timedelta(seconds=settings.lease_extension_seconds))
+    attempt.lease_expires_at = max(
+        now + timedelta(seconds=settings.lease_extension_seconds),
+        attempt.lease_expires_at
+    )
     session.commit()
     return attempt.lease_expires_at
 

@@ -32,6 +32,8 @@ def complete_job(
         raise HTTPException(404, str(exc)) from None
     except job_execution.OutcomeConflict as exc:
         raise HTTPException(409, str(exc)) from None
+    except job_execution.LeaseExpired as exc:
+        raise HTTPException(400, str(exc)) from None
     return {"Status": "200 OK"}
 
 
@@ -48,6 +50,8 @@ def fail_job(
         raise HTTPException(404, str(exc)) from None
     except job_execution.OutcomeConflict as exc:
         raise HTTPException(409, str(exc)) from None
+    except job_execution.LeaseExpired as exc:
+        raise HTTPException(400, str(exc)) from None
     return {"Status": "200 OK"}
 
 @claim_router.post(path="/workers/{attempt_id}/heartbeat", status_code=200)
@@ -61,4 +65,6 @@ def heartbeat(
     except job_execution.AttemptNotFound as exc:
         raise HTTPException(404, str(exc)) from None
     except job_execution.AttemptNotRunning as exc:
+        raise HTTPException(400, str(exc)) from None
+    except job_execution.LeaseExpired as exc:
         raise HTTPException(400, str(exc)) from None
