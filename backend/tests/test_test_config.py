@@ -101,6 +101,7 @@ def test_collection_isolates_early_application_imports(tmp_path, source):
         assert health.readiness_engine.url == url
         assert settings.secret_key == "0" * 64
         assert settings.lease_extension_seconds == 60
+        assert settings.recovery_interval_seconds == 5
 
         def test_placeholder():
             pass
@@ -110,13 +111,15 @@ def test_collection_isolates_early_application_imports(tmp_path, source):
     # The application's .env must not provide the database or test credentials.
     (tmp_path / ".env").write_text(
         "DATABASE_URL=postgresql+psycopg://localhost/application\n"
-        "SECRET_KEY=invalid\nLEASE_EXTENSION_SECONDS=invalid\n",
+        "SECRET_KEY=invalid\nLEASE_EXTENSION_SECONDS=invalid\n"
+        "RECOVERY_INTERVAL_SECONDS=invalid\n",
         encoding="utf-8",
     )
     environment = os.environ.copy()
     environment.pop("TEST_DATABASE_URL", None)
     environment.pop("SECRET_KEY", None)
     environment.pop("LEASE_EXTENSION_SECONDS", None)
+    environment.pop("RECOVERY_INTERVAL_SECONDS", None)
     environment["DATABASE_URL"] = "postgresql+psycopg://localhost/application"
     environment["PYTHONPATH"] = str(conftest.ROOT / "src")
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
