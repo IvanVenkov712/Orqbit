@@ -18,7 +18,7 @@ Reviewed on **2026-11-11** against the current code and tests. Verification of a
 | Input errors | Pydantic validation and generic 422 responses for PostgreSQL data errors, including oversized IDs and null characters | DTOs, `backend/src/main.py` |
 | Health | Liveness plus readiness checks for database access, migration heads, and all mapped tables/columns | `backend/src/health.py` |
 | Containers and CI | Non-root API image; PostgreSQL/migration/API Compose services; PostgreSQL tests and a separate Compose smoke job | `backend/Dockerfile`, `docker-compose.yml`, `.github/workflows/ci.yml` |
-| Example worker | Independently installable `add_numbers` worker with its own configuration, dependencies, and tests; claims and reports through HTTP only | `examples/workers/add_numbers/`, [worker guide](example-worker.md) |
+| Example worker | Independently installable `add_numbers` worker with its own configuration, dependencies, and tests; claims and reports through HTTP only | `examples/workers/add_numbers/`, [worker guide](../examples/workers/add_numbers/README.md) |
 
 The current lifecycle is `PENDING -> RUNNING -> SUCCEEDED/FAILED`. Workers execute outside the API. A supported type is a worker-declared capability, and job permission policies determine which jobs it can claim. See [API details](api.md).
 

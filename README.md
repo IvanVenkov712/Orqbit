@@ -79,7 +79,7 @@ These are planned capabilities. The [roadmap](docs/roadmap.md) describes the pro
 
 Start with the [Docker Compose quickstart](docs/quickstart.md) to run the API and PostgreSQL, authenticate, and submit a job. It requires Git and Docker in Linux-container mode; Python and PostgreSQL do not need to be installed on the host.
 
-Then follow the [example worker guide](docs/example-worker.md) to process an `add_numbers` job and retrieve its result. Interactive API documentation is available at `http://127.0.0.1:8000/docs` once the API is running.
+Then follow the [example worker guide](examples/workers/add_numbers/README.md) to process an `add_numbers` job and retrieve its result. Interactive API documentation is available at `http://127.0.0.1:8000/docs` once the API is running.
 
 The backend uses **Python, FastAPI, PostgreSQL, SQLAlchemy, Pydantic, and Alembic**. For running Python directly on your host, see the [development guide](docs/development.md#running-the-api-locally).
 
@@ -88,7 +88,9 @@ The backend uses **Python, FastAPI, PostgreSQL, SQLAlchemy, Pydantic, and Alembi
 | Guide | Contents |
 | --- | --- |
 | [Quickstart](docs/quickstart.md) | Docker setup and an authenticated submission walkthrough |
-| [Example worker](docs/example-worker.md) | Worker setup, configuration, execution, and checks |
+| [Add numbers worker](examples/workers/add_numbers/README.md) | Basic job execution, configuration, and tests |
+| [Delay worker](examples/workers/delay/README.md) | Configurable delay without heartbeat |
+| [Delay with heartbeat](examples/workers/delay_with_heartbeat/README.md) | Long execution with lease renewal and ownership checks |
 | [API reference](docs/api.md) | Authentication, permissions, requests, responses, and errors |
 | [Development](docs/development.md) | Local setup, repository layout, coordination details, migrations, and containers |
 | [Testing](docs/testing.md) | PostgreSQL integration tests and container verification |
