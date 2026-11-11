@@ -29,7 +29,7 @@ def clock(monkeypatch):
     from datetime import UTC, datetime, timedelta
     from types import SimpleNamespace
 
-    import worker
+    import heartbeat
 
     clock = SimpleNamespace(now=datetime(2030, 1, 1, tzinfo=UTC), elapsed=0, sleeps=[])
 
@@ -43,9 +43,9 @@ def clock(monkeypatch):
         clock.elapsed += seconds
         clock.now += timedelta(seconds=seconds)
 
-    monkeypatch.setattr(worker, "datetime", Clock)
+    monkeypatch.setattr(heartbeat, "datetime", Clock)
     monkeypatch.setattr(
-        worker,
+        heartbeat,
         "time",
         SimpleNamespace(
             sleep=sleep,

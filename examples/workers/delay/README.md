@@ -53,7 +53,7 @@ Ctrl+C stops the worker. Other HTTP/connection errors also stop it with code 1. 
 
 ## Code and checks
 
-`settings.py` contains configuration, `api.py` contains HTTP access, and `worker.py` contains execution and polling. This directory is independently installable and does not import backend or sibling-worker code.
+`settings.py` contains configuration, `api.py` contains HTTP access, `execution.py` handles one attempt (type check, delay, outcome), and `worker.py` contains polling and startup/error handling. This directory is independently installable and does not import backend or sibling-worker code.
 
 Tests use mocked HTTP; no running API or database is required.
 

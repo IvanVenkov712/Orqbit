@@ -54,7 +54,7 @@ Ctrl+C stops the worker. Other HTTP/connection errors also stop it with code 1. 
 
 ## Code and checks
 
-`settings.py` contains configuration, `api.py` contains HTTP access, and `worker.py` contains execution and polling. This directory is independently installable and does not import backend or sibling-worker code.
+`settings.py` contains configuration and `api.py` contains HTTP access. `heartbeat.py` reads lease deadlines, checks expiry, renews ownership, and coordinates the wait. `execution.py` handles one attempt (type check, wait, outcome), while `worker.py` contains polling and startup/error handling. This directory is independently installable and does not import backend or sibling-worker code.
 
 Tests use mocked HTTP and a virtual clock to cover execution beyond the original lease, ownership loss, and expiry; no running API or database is required.
 

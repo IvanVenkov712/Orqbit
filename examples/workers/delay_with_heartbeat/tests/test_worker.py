@@ -5,6 +5,8 @@ from urllib.error import HTTPError
 
 import pytest
 
+import execution
+import heartbeat
 import worker
 
 
@@ -31,7 +33,8 @@ def test_long_task_finishes_after_renewed_initial_lease(
         assert payload == {"result": {"waited_seconds": 12}}
         return {}
 
-    monkeypatch.setattr(worker, "post", post)
+    monkeypatch.setattr(execution, "post", post)
+    monkeypatch.setattr(heartbeat, "post", post)
     assert worker.run_once(settings) is True
     assert clock.elapsed == pytest.approx(12)
     assert paths.count("workers/17/heartbeat") >= 2
@@ -59,7 +62,8 @@ def test_heartbeat_failure_stops_without_outcome(
     monkeypatch.setattr(worker, "Settings", lambda: settings)
     monkeypatch.setattr(worker, "claim", Mock(return_value=attempt))
     post = Mock(side_effect=error)
-    monkeypatch.setattr(worker, "post", post)
+    monkeypatch.setattr(execution, "post", post)
+    monkeypatch.setattr(heartbeat, "post", post)
     caplog.set_level(logging.INFO, logger=worker.__name__)
 
     assert worker.main() == 1
@@ -74,8 +78,8 @@ def test_heartbeat_failure_stops_without_outcome(
 def test_empty_queue_does_not_execute_or_report(monkeypatch, settings):
     monkeypatch.setattr(worker, "claim", Mock(return_value=None))
     wait, post = Mock(), Mock()
-    monkeypatch.setattr(worker, "wait_with_heartbeats", wait)
-    monkeypatch.setattr(worker, "post", post)
+    monkeypatch.setattr(execution, "wait_with_heartbeats", wait)
+    monkeypatch.setattr(execution, "post", post)
 
     assert worker.run_once(settings) is False
     wait.assert_not_called()
@@ -86,8 +90,8 @@ def test_unsupported_type_does_not_execute(monkeypatch, settings, attempt):
     attempt["job_type"] = "unknown"
     monkeypatch.setattr(worker, "claim", Mock(return_value=attempt))
     wait, post = Mock(), Mock()
-    monkeypatch.setattr(worker, "wait_with_heartbeats", wait)
-    monkeypatch.setattr(worker, "post", post)
+    monkeypatch.setattr(execution, "wait_with_heartbeats", wait)
+    monkeypatch.setattr(execution, "post", post)
 
     assert worker.run_once(settings) is True
     wait.assert_not_called()
