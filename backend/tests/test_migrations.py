@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from alembic import command
 from alembic.migration import MigrationContext
@@ -7,7 +9,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
-from models.job import Job
+from models.job import Job, JobStatus
+from models.job_attempts import AttemptStatus, JobAttempt
 from models.user import User
 
 
@@ -253,4 +256,129 @@ def test_upgrade_rejects_legacy_running_jobs_without_partial_changes(
     finally:
         with database.begin() as connection:
             connection.execute(text("DELETE FROM jobs WHERE status = 'RUNNING'"))
+        command.upgrade(alembic_config, "head")
+
+
+def test_lease_upgrade_preserves_terminal_attempts(
+    database, alembic_config, user, claim_worker
+):
+    worker, _ = claim_worker
+    old_time = datetime(2020, 1, 1, tzinfo=UTC)
+    with Session(database) as session:
+        session.add(
+            Job(
+                job_type="example",
+                params={"input": True},
+                status=JobStatus.FAILED,
+                user_id=user.id,
+                idempotency_key="lease-migration",
+                request_fingerprint="test-fingerprint",
+                attempts=[
+                    JobAttempt(
+                        worker_id=worker.id,
+                        attempt_number=number,
+                        status=status,
+                        params={"number": number},
+                        result={"value": 3}
+                        if status == AttemptStatus.SUCCEEDED
+                        else None,
+                        error={"message": "failed"}
+                        if status == AttemptStatus.FAILED
+                        else None,
+                        created_at=old_time,
+                        updated_at=old_time + timedelta(hours=number),
+                    )
+                    for number, status in enumerate(
+                        (
+                            AttemptStatus.SUCCEEDED,
+                            AttemptStatus.FAILED,
+                            AttemptStatus.LOST,
+                        ),
+                        start=1,
+                    )
+                ],
+            )
+        )
+        session.commit()
+
+    try:
+        command.downgrade(alembic_config, "4610066358ca")
+        with database.connect() as connection:
+            original = (
+                connection.execute(text("SELECT * FROM job_attempts ORDER BY id"))
+                .mappings()
+                .all()
+            )
+
+        command.upgrade(alembic_config, "head")
+        with database.connect() as connection:
+            columns = {
+                column["name"]: column
+                for column in inspect(connection).get_columns("job_attempts")
+            }
+            assert columns["lease_expires_at"]["nullable"] is False
+            assert columns["lease_expires_at"]["type"].timezone is True
+            assert columns["lease_expires_at"]["default"] is None
+            migrated = (
+                connection.execute(text("SELECT * FROM job_attempts ORDER BY id"))
+                .mappings()
+                .all()
+            )
+            assert len(migrated) == len(original) == 3
+            for before, after in zip(original, migrated, strict=True):
+                values = dict(after)
+                assert values.pop("lease_expires_at") == before["updated_at"]
+                assert values == dict(before)
+
+        command.check(alembic_config)
+    finally:
+        command.upgrade(alembic_config, "head")
+
+
+def test_lease_upgrade_rejects_running_attempts_without_partial_changes(
+    database, alembic_config, user, claim_worker
+):
+    worker, _ = claim_worker
+    with Session(database) as session:
+        session.add(
+            Job(
+                job_type="example",
+                params={},
+                status=JobStatus.RUNNING,
+                user_id=user.id,
+                idempotency_key="running-lease-migration",
+                request_fingerprint="test-fingerprint",
+                attempts=[JobAttempt(worker_id=worker.id, attempt_number=1, params={})],
+            )
+        )
+        session.commit()
+
+    try:
+        command.downgrade(alembic_config, "4610066358ca")
+        with database.connect() as connection:
+            original = (
+                connection.execute(text("SELECT * FROM job_attempts")).mappings().one()
+            )
+
+        with pytest.raises(DBAPIError, match="Resolve legacy RUNNING attempts"):
+            command.upgrade(alembic_config, "head")
+
+        with database.connect() as connection:
+            assert MigrationContext.configure(connection).get_current_revision() == (
+                "4610066358ca"
+            )
+            assert "lease_expires_at" not in {
+                column["name"]
+                for column in inspect(connection).get_columns("job_attempts")
+            }
+            assert (
+                connection.execute(text("SELECT * FROM job_attempts")).mappings().one()
+                == original
+            )
+            assert connection.scalar(text("SELECT status FROM jobs")) == "RUNNING"
+    finally:
+        # Resolve the legacy attempt before restoring the schema for fixture cleanup.
+        with database.begin() as connection:
+            connection.execute(text("UPDATE job_attempts SET status = 'FAILED'"))
+            connection.execute(text("UPDATE jobs SET status = 'FAILED'"))
         command.upgrade(alembic_config, "head")
