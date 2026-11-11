@@ -74,6 +74,8 @@ def pytest_configure(config):
     environment.setenv("LEASE_SECONDS", "120")
     environment.setenv("LEASE_EXTENSION_SECONDS", "60")
     environment.setenv("RECOVERY_INTERVAL_SECONDS", "5")
+    environment.setenv("RECOVERY_BATCH_SIZE", "1000")
+    environment.setenv("MAX_UNKNOWN_DATABASE_ERRORS", "3")
     environment.setenv("SECRET_KEY", "0" * 64)
     environment.setenv("ALGORITHM", "HS256")
     environment.setenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")

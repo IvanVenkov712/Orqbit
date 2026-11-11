@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     algorithm: str
     access_token_expire_minutes: PositiveInt
     recovery_interval_seconds: PositiveInt
+    # Reserve parameters for the fixed predicates and values in recovery UPDATEs.
+    recovery_batch_size: PositiveInt = Field(default=1000, le=65530)
+    max_unknown_database_errors: PositiveInt = 3
 
     @field_validator("database_url")
     @classmethod

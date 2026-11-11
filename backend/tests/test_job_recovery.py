@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from threading import Event
 from time import monotonic
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -14,9 +15,9 @@ from psycopg.errors import (
     InvalidPassword,
     UndefinedTable,
 )
-from sqlalchemy import event, func, select
+from sqlalchemy import create_engine, event, func, insert, select
 from sqlalchemy.exc import OperationalError, ProgrammingError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from models.job import Job, JobStatus
 from models.job_attempts import AttemptStatus, JobAttempt
@@ -30,6 +31,70 @@ def test_recovery_handles_empty_queue(database):
     with Session(database) as session:
         assert session.scalars(select(Job)).all() == []
         assert session.scalars(select(JobAttempt)).all() == []
+
+
+@pytest.mark.parametrize("attempt_count", [5, 65536])
+def test_recovery_processes_backlog_in_bounded_batches(
+    database, claim_worker, monkeypatch, attempt_count
+):
+    from services import job_execution
+
+    worker, _ = claim_worker
+    if attempt_count == 5:
+        monkeypatch.setattr(job_execution.settings, "recovery_batch_size", 2)
+    batch_size = job_execution.settings.recovery_batch_size
+    with Session(database) as session:
+        now = session.scalar(select(func.clock_timestamp()))
+        job_ids = session.scalars(
+            insert(Job).returning(Job.id),
+            [
+                {
+                    "job_type": "example",
+                    "params": {},
+                    "user_id": worker.user_id,
+                    "idempotency_key": f"recovery-backlog-{index}",
+                    "request_fingerprint": "test-fingerprint",
+                    "status": JobStatus.RUNNING,
+                }
+                for index in range(attempt_count)
+            ],
+        ).all()
+        session.execute(
+            insert(JobAttempt),
+            [
+                {
+                    "job_id": job_id,
+                    "worker_id": worker.id,
+                    "attempt_number": 1,
+                    "params": {},
+                    "lease_expires_at": now - timedelta(days=1),
+                }
+                for job_id in job_ids
+            ],
+        )
+        session.commit()
+
+    for processed in range(0, attempt_count, batch_size):
+        with Session(database) as session:
+            job_execution.recover_expired_attempts(session)
+        with Session(database) as session:
+            expected = min(processed + batch_size, attempt_count)
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(JobAttempt)
+                    .where(JobAttempt.status == AttemptStatus.LOST)
+                )
+                == expected
+            )
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(Job)
+                    .where(Job.status == JobStatus.FAILED)
+                )
+                == expected
+            )
 
 
 def test_recovery_preserves_unexpired_and_terminal_attempts(database, claim_worker):
@@ -260,6 +325,72 @@ def test_recovery_runner_does_not_retry_permanent_errors(database, monkeypatch, 
     with pytest.raises(type(error)) as raised:
         recovery.main()
     assert raised.value is error
+
+
+@pytest.mark.parametrize(
+    "message", ["password authentication failed", "database does not exist"]
+)
+@pytest.mark.parametrize("limit", [1, 4])
+def test_recovery_runner_bounds_errors_without_sqlstate(
+    monkeypatch, caplog, message, limit
+):
+    import recovery
+
+    monkeypatch.setattr(recovery.settings, "max_unknown_database_errors", limit)
+    error = OperationalError(None, None, PsycopgOperationalError(message))
+    scan = Mock(side_effect=error)
+    pause = Mock()
+    monkeypatch.setattr(recovery, "recover_expired_attempts", scan)
+    monkeypatch.setattr(recovery, "sleep", pause)
+
+    with pytest.raises(OperationalError) as raised:
+        recovery.main()
+
+    assert raised.value is error
+    assert scan.call_count == limit
+    assert pause.call_count == limit - 1
+    if limit > 1:
+        pause.assert_called_with(recovery.settings.recovery_interval_seconds)
+    assert (
+        f"Recovery stopped after {limit} consecutive errors without SQLSTATE"
+        in caplog.text
+    )
+
+
+def test_recovery_runner_bounds_real_startup_errors(database, monkeypatch):
+    import recovery
+
+    # libpq startup errors lack SQLSTATE, unlike constructed InvalidPassword errors.
+    missing_database = create_engine(
+        database.url.set(database=f"missing_{uuid4().hex}"),
+        connect_args={"connect_timeout": 3},
+    )
+    pause = Mock()
+    monkeypatch.setattr(recovery, "SessionLocal", sessionmaker(bind=missing_database))
+    monkeypatch.setattr(recovery, "sleep", pause)
+    try:
+        with pytest.raises(OperationalError) as raised:
+            recovery.main()
+        assert raised.value.orig.sqlstate is None
+        assert pause.call_count == 2
+    finally:
+        missing_database.dispose()
+
+
+def test_recovery_runner_resets_unknown_error_count_after_success(monkeypatch):
+    import recovery
+
+    error = OperationalError(None, None, PsycopgOperationalError("Unavailable"))
+    scan = Mock(side_effect=[error, error, None, error, error, None, KeyboardInterrupt])
+    pause = Mock()
+    monkeypatch.setattr(recovery, "recover_expired_attempts", scan)
+    monkeypatch.setattr(recovery, "sleep", pause)
+
+    with pytest.raises(KeyboardInterrupt):
+        recovery.main()
+
+    assert scan.call_count == 7
+    assert pause.call_count == 6
 
 
 @pytest.mark.parametrize(

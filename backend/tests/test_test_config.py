@@ -6,6 +6,7 @@ from textwrap import dedent
 
 import conftest
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, text
 
 
@@ -102,6 +103,8 @@ def test_collection_isolates_early_application_imports(tmp_path, source):
         assert settings.secret_key == "0" * 64
         assert settings.lease_extension_seconds == 60
         assert settings.recovery_interval_seconds == 5
+        assert settings.recovery_batch_size == 1000
+        assert settings.max_unknown_database_errors == 3
 
         def test_placeholder():
             pass
@@ -112,7 +115,8 @@ def test_collection_isolates_early_application_imports(tmp_path, source):
     (tmp_path / ".env").write_text(
         "DATABASE_URL=postgresql+psycopg://localhost/application\n"
         "SECRET_KEY=invalid\nLEASE_EXTENSION_SECONDS=invalid\n"
-        "RECOVERY_INTERVAL_SECONDS=invalid\n",
+        "RECOVERY_INTERVAL_SECONDS=invalid\n"
+        "RECOVERY_BATCH_SIZE=invalid\nMAX_UNKNOWN_DATABASE_ERRORS=invalid\n",
         encoding="utf-8",
     )
     environment = os.environ.copy()
@@ -120,6 +124,8 @@ def test_collection_isolates_early_application_imports(tmp_path, source):
     environment.pop("SECRET_KEY", None)
     environment.pop("LEASE_EXTENSION_SECONDS", None)
     environment.pop("RECOVERY_INTERVAL_SECONDS", None)
+    environment.pop("RECOVERY_BATCH_SIZE", None)
+    environment.pop("MAX_UNKNOWN_DATABASE_ERRORS", None)
     environment["DATABASE_URL"] = "postgresql+psycopg://localhost/application"
     environment["PYTHONPATH"] = str(conftest.ROOT / "src")
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -149,6 +155,37 @@ def test_collection_isolates_early_application_imports(tmp_path, source):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 test collected" in result.stdout
+
+
+def test_recovery_settings_load_environment(monkeypatch):
+    from config import Settings
+
+    monkeypatch.setenv("RECOVERY_BATCH_SIZE", "250")
+    monkeypatch.setenv("MAX_UNKNOWN_DATABASE_ERRORS", "4")
+
+    settings = Settings(_env_file=None)
+    assert settings.recovery_batch_size == 250
+    assert settings.max_unknown_database_errors == 4
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("RECOVERY_BATCH_SIZE", "0"),
+        ("RECOVERY_BATCH_SIZE", "-1"),
+        ("RECOVERY_BATCH_SIZE", "65531"),
+        ("MAX_UNKNOWN_DATABASE_ERRORS", "0"),
+        ("MAX_UNKNOWN_DATABASE_ERRORS", "-1"),
+    ],
+)
+def test_recovery_settings_reject_invalid_limits(monkeypatch, name, value):
+    from config import Settings
+
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError) as raised:
+        Settings(_env_file=None)
+    assert raised.value.errors()[0]["loc"] == (name.lower(),)
 
 
 @pytest.mark.parametrize(

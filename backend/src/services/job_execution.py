@@ -155,10 +155,22 @@ def send_heartbeat(
     return attempt.lease_expires_at
 
 def recover_expired_attempts(session: Session):
+    """Recover one bounded batch, committing attempts and their jobs together."""
     now = get_db_now(session)
+    expired_attempt_ids = session.scalars(
+        select(JobAttempt.id)
+        .where(
+            JobAttempt.status == AttemptStatus.RUNNING,
+            JobAttempt.lease_expires_at <= now,
+        )
+        .order_by(JobAttempt.id)
+        .limit(settings.recovery_batch_size)
+        .with_for_update()
+    ).all()
     stmt = (
         update(JobAttempt)
         .where(
+            JobAttempt.id.in_(expired_attempt_ids),
             JobAttempt.status == AttemptStatus.RUNNING,
             JobAttempt.lease_expires_at <= now,
 
