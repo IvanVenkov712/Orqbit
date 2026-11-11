@@ -195,3 +195,24 @@ def worker_factory(database, user):
 @pytest.fixture
 def claim_worker(worker_factory):
     return worker_factory()
+
+
+@pytest.fixture
+def claimed_attempt(client, database, claim_worker):
+    from models.job import Job
+
+    worker, headers = claim_worker
+    with Session(database) as session:
+        session.add(
+            Job(
+                job_type="example",
+                params={"input": True},
+                user_id=worker.user_id,
+                idempotency_key="lease-test",
+                request_fingerprint="test-fingerprint",
+            )
+        )
+        session.commit()
+    response = client.post("/workers/claim", headers=headers)
+    assert response.status_code == 200
+    return response.json(), headers

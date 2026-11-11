@@ -28,7 +28,7 @@ Tests require an explicit `TEST_DATABASE_URL` using the psycopg driver and a dat
 
 ### What is tested and why
 
-The pytest suite covers the current authenticated API and attempt-based outcomes. Its sources are [job tests](../backend/tests/test_jobs.py), [concurrent claim tests](../backend/tests/test_concurrent_claims.py), [health tests](../backend/tests/test_health.py), and [migration tests](../backend/tests/test_migrations.py). The [Compose smoke check](../backend/tests/compose_smoke.py) runs separately.
+The pytest suite covers the current authenticated API and attempt-based outcomes. The [job tests](../backend/tests/) are grouped by submission and reads, idempotency, queries, permissions, claims, outcomes, leases, and recovery. Other coverage includes [concurrent claim tests](../backend/tests/test_concurrent_claims.py), [health tests](../backend/tests/test_health.py), and [migration tests](../backend/tests/test_migrations.py). The [Compose smoke check](../backend/tests/compose_smoke.py) runs separately.
 
 | Area | What is checked | Why |
 | --- | --- | --- |
