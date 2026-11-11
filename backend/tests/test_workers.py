@@ -1,0 +1,226 @@
+"""Worker registration, credential secrecy, and permission-aware discovery."""
+
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from models.job import Job
+from models.job_attempts import JobAttempt
+from models.supported_types import SupportedJobType
+from models.user import User
+from models.worker import PermissionPolicy, Worker
+from models.worker_permitted_users import WorkerPermittedUser
+from services.worker_auth import hash_api_key
+
+
+def test_registered_worker_key_claims_and_is_not_exposed_by_reads(
+    client, database, user, user_headers
+):
+    response = client.post(
+        "/workers",
+        headers=user_headers,
+        json={
+            "name": "registered",
+            "supported_types": ["example", "example"],
+            "permission_policy": "PRIVATE",
+        },
+    )
+    assert response.status_code == 200
+    created = response.json()
+    key = created.pop("secret_api_key")
+    assert key.startswith("oqb_")
+    assert created["user_id"] == user.id
+    assert created["supported_types"] == ["example"]
+    with Session(database) as session:
+        stored = session.get(Worker, created["id"])
+        assert stored.secret_api_key_hash == hash_api_key(key)
+        assert stored.secret_api_key_hash != key
+        session.add(
+            Job(
+                user_id=user.id,
+                job_type="example",
+                params={"input": True},
+                idempotency_key="registered-worker",
+                request_fingerprint="test",
+            )
+        )
+        session.commit()
+    claim = client.post("/workers/claim", headers={"X-API-Key": key})
+    assert claim.status_code == 200
+    with Session(database) as session:
+        assert session.get(JobAttempt, claim.json()["id"]).worker_id == created["id"]
+    for path, expected in [
+        (f"/workers/{created['id']}", created),
+        ("/workers", [created]),
+    ]:
+        response = client.get(path, headers=user_headers)
+        assert response.status_code == 200
+        assert response.json() == expected
+        assert key not in response.text
+        assert hash_api_key(key) not in response.text
+
+
+@pytest.mark.parametrize("case", ["duplicate-name", "missing-user"])
+def test_rejected_worker_registration_leaves_no_partial_records(
+    client, database, user, user_headers, case
+):
+    payload = {
+        "name": "registered",
+        "supported_types": ["example"],
+        "permission_policy": "PERMITTED_USERS",
+        "permitted_user_ids": [user.id],
+    }
+    if case == "duplicate-name":
+        assert (
+            client.post("/workers", headers=user_headers, json=payload).status_code
+            == 200
+        )
+    else:
+        payload["permitted_user_ids"] = [user.id, user.id + 10000]
+    with Session(database) as session:
+        before = {
+            table.name: session.execute(select(table)).mappings().all()
+            for table in (
+                Worker.__table__,
+                SupportedJobType.__table__,
+                WorkerPermittedUser.__table__,
+            )
+        }
+    response = client.post("/workers", headers=user_headers, json=payload)
+    assert response.status_code == (409 if case == "duplicate-name" else 422)
+    assert response.json() == {
+        "detail": (
+            "Worker name already exists"
+            if case == "duplicate-name"
+            else "Some permitted users do not exist"
+        )
+    }
+    with Session(database) as session:
+        for table in (
+            Worker.__table__,
+            SupportedJobType.__table__,
+            WorkerPermittedUser.__table__,
+        ):
+            assert session.execute(select(table)).mappings().all() == before[table.name]
+
+
+@pytest.mark.parametrize(
+    ("policy", "owned", "granted", "visible"),
+    [
+        ("PRIVATE", True, False, True),
+        ("PERMITTED_USERS", True, False, True),
+        ("ALL", True, False, True),
+        ("PRIVATE", False, False, False),
+        ("PRIVATE", False, True, False),
+        ("PERMITTED_USERS", False, False, False),
+        ("PERMITTED_USERS", False, True, True),
+        ("ALL", False, False, True),
+    ],
+)
+def test_worker_visibility_applies_to_details_and_lists(
+    client, database, user, user_headers, policy, owned, granted, visible
+):
+    with Session(database) as session:
+        owner = (
+            session.get(User, user.id)
+            if owned
+            else User(
+                username="other-owner",
+                email="other@example.com",
+                full_name="Other",
+                hashed_password="unused",
+            )
+        )
+        worker = Worker(
+            name="visible-worker",
+            user=owner,
+            secret_api_key_hash="unused",
+            permission_policy=PermissionPolicy(policy),
+            supported_types=[SupportedJobType(type_name="example")],
+            permitted_users=[session.get(User, user.id)] if granted else [],
+        )
+        session.add(worker)
+        session.commit()
+        worker_id = worker.id
+    response = client.get(f"/workers/{worker_id}", headers=user_headers)
+    assert response.status_code == (200 if visible else 404)
+    if not visible:
+        assert response.json() == {"detail": "Worker not found"}
+    response = client.get("/workers", headers=user_headers)
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == ([worker_id] if visible else [])
+
+
+def test_worker_filters_apply_before_ordering_and_pagination(
+    client, database, user, user_headers
+):
+    with Session(database) as session:
+        other = User(
+            username="other-owner",
+            email="other@example.com",
+            full_name="Other",
+            hashed_password="unused",
+        )
+        session.add(other)
+        session.flush()
+        records = []
+        for index, (owner_id, types, policy) in enumerate(
+            [
+                (user.id, ["example", "extra"], PermissionPolicy.PRIVATE),
+                (user.id, ["example"], PermissionPolicy.ALL),
+                (user.id, ["different"], PermissionPolicy.PRIVATE),
+                (other.id, ["example"], PermissionPolicy.ALL),
+                (other.id, ["example"], PermissionPolicy.PRIVATE),
+            ]
+        ):
+            worker = Worker(
+                name=f"worker-{index}",
+                user_id=owner_id,
+                secret_api_key_hash=f"hash-{index}",
+                permission_policy=policy,
+                supported_types=[SupportedJobType(type_name=value) for value in types],
+            )
+            session.add(worker)
+            session.flush()
+            records.append(worker.id)
+        session.commit()
+    for params, expected in [
+        ({}, records[3::-1]),
+        ({"owner_id": user.id}, records[2::-1]),
+        ({"job_type": "example"}, [records[3], records[1], records[0]]),
+        ({"owner_id": user.id, "job_type": "example", "limit": 1}, [records[1]]),
+        (
+            {"owner_id": user.id, "job_type": "example", "limit": 1, "offset": 1},
+            [records[0]],
+        ),
+        ({"owner_id": user.id, "job_type": "example", "offset": 2}, []),
+    ]:
+        response = client.get("/workers", headers=user_headers, params=params)
+        assert response.status_code == 200
+        assert [item["id"] for item in response.json()] == expected
+
+
+@pytest.mark.parametrize("params", [{"limit": 0}, {"limit": 101}, {"offset": -1}])
+def test_worker_list_rejects_invalid_pagination(client, user_headers, params):
+    assert (
+        client.get("/workers", headers=user_headers, params=params).status_code == 422
+    )
+
+
+@pytest.mark.parametrize("path", ["/workers", "/workers/1"])
+def test_worker_reads_require_user_authentication(client, path):
+    assert client.get(path).status_code == 401
+
+
+def test_worker_registration_requires_user_authentication(client, database):
+    response = client.post(
+        "/workers",
+        json={
+            "name": "registered",
+            "supported_types": ["example"],
+            "permission_policy": "PRIVATE",
+        },
+    )
+    assert response.status_code == 401
+    with Session(database) as session:
+        assert session.scalar(select(func.count()).select_from(Worker)) == 0

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import logging
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
@@ -40,10 +41,34 @@ def test_add_numbers(numbers, total):
     assert worker.add_numbers({"numbers": numbers}) == {"sum": total}
 
 
-@pytest.mark.parametrize("params", [{}, {"numbers": [True]}, {"numbers": ["2"]}])
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"numbers": [True]},
+        {"numbers": ["2"]},
+        {"numbers": None},
+        {"numbers": "123"},
+        {"numbers": [float("nan")]},
+        {"numbers": [float("inf")]},
+        {"numbers": [float("-inf")]},
+    ],
+)
 def test_add_numbers_rejects_invalid_input(params):
     with pytest.raises(ValueError):
         worker.add_numbers(params)
+
+
+@pytest.mark.parametrize(
+    ("numbers", "message"),
+    [
+        ([1e308, 1e308], "sum must be finite"),
+        ([10**400, 1.0], "sum is outside the supported numeric range"),
+    ],
+)
+def test_add_numbers_rejects_overflow(numbers, message):
+    with pytest.raises(ValueError, match=message):
+        worker.add_numbers({"numbers": numbers})
 
 
 @pytest.mark.parametrize(
@@ -116,3 +141,67 @@ def test_empty_queue_is_distinct_from_api_errors(monkeypatch, status, detail):
     else:
         with pytest.raises(HTTPError):
             worker.run_once(settings)
+
+
+def test_unsupported_job_type_reports_failure_without_execution(monkeypatch):
+    from unittest.mock import Mock
+
+    settings = worker.Settings(
+        _env_file=None, api_key="worker-key", api_url="http://localhost:8000"
+    )
+    post = Mock(side_effect=[{"id": 17, "job_type": "unknown", "params": {}}, {}])
+    execute = Mock(side_effect=AssertionError("Unsupported job must not execute"))
+    monkeypatch.setattr(worker, "post", post)
+    monkeypatch.setattr(worker, "add_numbers", execute)
+    assert worker.run_once(settings) is True
+    assert post.call_count == 2
+    post.assert_called_with(
+        settings,
+        "workers/17/fail",
+        {
+            "error": {
+                "code": "UNSUPPORTED_JOB_TYPE",
+                "message": "This worker only supports add_numbers",
+            }
+        },
+    )
+    execute.assert_not_called()
+
+
+def test_report_timeout_stops_worker_without_reporting_success_or_retrying(
+    monkeypatch, caplog
+):
+    from unittest.mock import Mock
+
+    settings = worker.Settings(
+        _env_file=None, api_key="private-key", api_url="http://localhost:8000"
+    )
+    caplog.set_level(logging.INFO, logger=worker.__name__)
+    requests = []
+
+    def respond(request, timeout):
+        requests.append(request)
+        if len(requests) == 1:
+            return BytesIO(
+                json.dumps(
+                    {
+                        "id": 17,
+                        "job_type": "add_numbers",
+                        "params": {"numbers": [2, 3]},
+                    }
+                ).encode()
+            )
+        raise TimeoutError("private connection diagnostics")
+
+    monkeypatch.setattr(worker, "Settings", lambda: settings)
+    monkeypatch.setattr(worker, "urlopen", respond)
+    pause = Mock()
+    monkeypatch.setattr(worker.time, "sleep", pause)
+    assert worker.main() == 1
+    assert len(requests) == 2
+    assert requests[1].full_url.endswith("/workers/17/succeed")
+    assert json.loads(requests[1].data) == {"result": {"sum": 5}}
+    pause.assert_not_called()
+    assert "API connection failed; worker stopped" in caplog.text
+    assert "Reported outcome" not in caplog.text
+    assert "private" not in caplog.text

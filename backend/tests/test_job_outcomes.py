@@ -1,10 +1,15 @@
 """Owned outcome reports, terminal replays, and rejected updates."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Event
+from time import monotonic
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from fastapi.testclient import TestClient
+from sqlalchemy import event, func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from models.job import Job, JobStatus
@@ -320,3 +325,160 @@ def test_outcome_rejection_preserves_running_attempt(
         for record in (attempt, attempt.job):
             assert record.result is None
             assert record.error is None
+
+
+@pytest.mark.parametrize("first_endpoint", ["succeed", "fail"])
+@pytest.mark.parametrize("second_report", ["identical", "changed", "opposite"])
+def test_concurrent_outcomes_serialize_and_preserve_first_report(
+    client, database, claimed_attempt, first_endpoint, second_report
+):
+    from database import engine as api_engine
+    from main import app
+
+    claim, headers = claimed_attempt
+    locked, release, waiting = Event(), Event(), Event()
+    first_pid, waiting_pid = [], []
+    first_snapshot = {}
+
+    def hold_first_report(session, flush_context):
+        if not locked.is_set() and any(
+            isinstance(record, Job) and record.id == claim["job_id"]
+            for record in session.dirty
+        ):
+            # Preserve the first report's timestamps too: the waiter must not rewrite them.
+            for model in (JobAttempt, Job):
+                first_snapshot[model] = (
+                    session.execute(select(model.__table__)).mappings().one()
+                )
+            first_pid.append(
+                session.connection().connection.driver_connection.info.backend_pid
+            )
+            locked.set()
+            assert release.wait(timeout=20), "First report was never released"
+
+    def observe_waiter(connection, cursor, statement, parameters, context, executemany):
+        if (
+            locked.is_set()
+            and "FROM job_attempts" in statement
+            and "FOR UPDATE" in statement
+        ):
+            waiting_pid.append(connection.connection.driver_connection.info.backend_pid)
+            waiting.set()
+
+    first_field = "result" if first_endpoint == "succeed" else "error"
+    second_endpoint = (
+        ("fail" if first_endpoint == "succeed" else "succeed")
+        if second_report == "opposite"
+        else first_endpoint
+    )
+    second_field = "result" if second_endpoint == "succeed" else "error"
+    with TestClient(app) as other_client, ThreadPoolExecutor(max_workers=2) as executor:
+        event.listen(Session, "after_flush", hold_first_report)
+        event.listen(api_engine, "before_cursor_execute", observe_waiter)
+        try:
+            first_future = executor.submit(
+                client.post,
+                f"/workers/{claim['id']}/{first_endpoint}",
+                headers=headers,
+                json={first_field: {"value": 3}},
+            )
+            try:
+                assert locked.wait(timeout=10), "First report never reached PostgreSQL"
+                second_future = executor.submit(
+                    other_client.post,
+                    f"/workers/{claim['id']}/{second_endpoint}",
+                    headers=headers,
+                    json={
+                        second_field: {"value": 4 if second_report == "changed" else 3}
+                    },
+                )
+                assert waiting.wait(timeout=10), (
+                    "Second report never attempted its lock"
+                )
+                with database.connect() as connection:
+                    deadline = monotonic() + 10
+                    while monotonic() < deadline:
+                        if first_pid[0] in connection.scalar(
+                            select(func.pg_blocking_pids(waiting_pid[0]))
+                        ):
+                            break
+                    else:
+                        pytest.fail("Second report did not wait for the attempt lock")
+                assert not second_future.done()
+            finally:
+                release.set()
+            first = first_future.result(timeout=10)
+            second = second_future.result(timeout=10)
+        finally:
+            release.set()
+            executor.shutdown(wait=True)
+            event.remove(Session, "after_flush", hold_first_report)
+            event.remove(api_engine, "before_cursor_execute", observe_waiter)
+
+    assert first.status_code == 200
+    assert second.status_code == (200 if second_report == "identical" else 409)
+    if second_report != "identical":
+        assert second.json() == {"detail": "Conflicting outcome report"}
+    with Session(database) as session:
+        for model in (JobAttempt, Job):
+            stored = session.execute(select(model.__table__)).mappings().one()
+            assert stored == first_snapshot[model]
+            assert stored["status"].value == (
+                "SUCCEEDED" if first_endpoint == "succeed" else "FAILED"
+            )
+            assert stored[first_field] == {"value": 3}
+            assert stored["error" if first_field == "result" else "result"] is None
+
+
+@pytest.mark.parametrize("endpoint", ["succeed", "fail"])
+def test_outcome_database_failure_rolls_back_and_allows_retry(
+    client, database, claimed_attempt, endpoint
+):
+    claim, headers = claimed_attempt
+    with Session(database) as session:
+        before = {
+            model: session.execute(select(model.__table__)).mappings().one()
+            for model in (JobAttempt, Job)
+        }
+    error = OperationalError(None, None, RuntimeError("Simulated database failure"))
+    flushed = []
+
+    def fail_after_flush(session, flush_context):
+        if any(
+            isinstance(record, Job) and record.id == claim["job_id"]
+            for record in session.dirty
+        ):
+            flushed.append(True)
+            raise error
+
+    field = "result" if endpoint == "succeed" else "error"
+    payload = {field: {"value": 3}}
+    event.listen(Session, "after_flush", fail_after_flush)
+    try:
+        with pytest.raises(OperationalError) as raised:
+            client.post(
+                f"/workers/{claim['id']}/{endpoint}", headers=headers, json=payload
+            )
+        assert raised.value is error
+    finally:
+        event.remove(Session, "after_flush", fail_after_flush)
+    assert flushed == [True]
+    with Session(database) as session:
+        for model in (JobAttempt, Job):
+            assert (
+                session.execute(select(model.__table__)).mappings().one()
+                == before[model]
+            )
+
+    response = client.post(
+        f"/workers/{claim['id']}/{endpoint}", headers=headers, json=payload
+    )
+    assert response.status_code == 200
+    with Session(database) as session:
+        attempt = session.get(JobAttempt, claim["id"])
+        for record in (attempt, attempt.job):
+            assert record.status.value == (
+                "SUCCEEDED" if endpoint == "succeed" else "FAILED"
+            )
+            assert getattr(record, field) == payload[field]
+            assert getattr(record, "error" if field == "result" else "result") is None
