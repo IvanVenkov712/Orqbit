@@ -20,6 +20,7 @@ class JobAttemptBase(BaseModel):
     attempt_number: int
     status: AttemptStatus
     params: dict[str, Any]
+    lease_expires_at: datetime
 
 class JobAttemptClaim(JobAttemptBase):
    pass

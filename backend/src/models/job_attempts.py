@@ -1,10 +1,20 @@
 import enum
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import CheckConstraint, Enum, ForeignKey, Index, UniqueConstraint, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from config import settings
 from models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
@@ -39,6 +49,13 @@ class JobAttempt(Base, TimestampMixin):
     worker_id: Mapped[int] = mapped_column(ForeignKey("workers.id"))
     worker: Mapped["Worker"] = relationship(back_populates="attempts")
 
+    lease_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC)
+                        + timedelta(seconds=settings.lease_seconds),
+        nullable=False,
+    )
+    
     __table_args__ = (
         UniqueConstraint("job_id", "attempt_number"),
         CheckConstraint(
