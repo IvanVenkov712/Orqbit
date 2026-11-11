@@ -1,4 +1,4 @@
-"""Build a private Compose stack and verify persistence across recreation.
+"""Build a private Compose stack and verify persistence and lease recovery.
 
 Run explicitly with `python tests/compose_smoke.py`; this is not a pytest test.
 Only this run's randomly named Compose project and volume are removed.
@@ -33,8 +33,11 @@ def main() -> None:
         "DATABASE_URL": (
             f"postgresql+psycopg://orqbit_smoke:{password}@db:5432/orqbit_smoke"
         ),
-        "LEASE_SECONDS": "120",
+        "LEASE_SECONDS": "5",
         "LEASE_EXTENSION_SECONDS": "60",
+        "RECOVERY_INTERVAL_SECONDS": "1",
+        "RECOVERY_BATCH_SIZE": "1000",
+        "MAX_UNKNOWN_DATABASE_ERRORS": "3",
         "SECRET_KEY": secrets.token_hex(32),
         "ALGORITHM": "HS256",
         "ACCESS_TOKEN_EXPIRE_MINUTES": "30",
@@ -84,7 +87,7 @@ def main() -> None:
 
     try:
         compose("config", "--quiet")
-        compose("up", "--build", "--wait", "--wait-timeout", "120", "api")
+        compose("up", "--build", "--wait", "--wait-timeout", "120", "api", "recovery")
         wait_for_api()
         assert request("/health/live") == {"status": "ok"}
 
@@ -151,13 +154,60 @@ def main() -> None:
         wait_for_api()
         assert request(path, headers=auth_headers) == created
 
+        worker = request(
+            "/workers",
+            {
+                "name": "recovery-smoke",
+                "supported_types": ["recovery-smoke"],
+                "permission_policy": "PRIVATE",
+            },
+            headers=auth_headers,
+        )
+        abandoned = request(
+            "/jobs/",
+            {
+                "job_type": "recovery-smoke",
+                "params": {},
+                "permission_policy": "PRIVATE",
+            },
+            headers={**auth_headers, "Idempotency-Key": uuid4().hex},
+        )
+        worker_headers = {"X-API-Key": worker["secret_api_key"]}
+        # No heartbeat or outcome follows this claim, simulating a worker exit.
+        attempt = request("/workers/claim", {}, headers=worker_headers)
+        assert attempt["job_id"] == abandoned["id"]
+        assert attempt["status"] == "RUNNING"
+        abandoned_path = f"/jobs/{abandoned['id']}"
+        deadline = time.monotonic() + 30
+        while True:
+            recovered = request(abandoned_path, headers=auth_headers)
+            if recovered["status"] == "FAILED":
+                break
+            assert recovered["status"] == "RUNNING"
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Abandoned job was not recovered within 30 seconds")
+            time.sleep(0.25)
+        history = request(f"{abandoned_path}/attempts", headers=auth_headers)
+        assert len(history) == 1
+        assert history[0]["id"] == attempt["id"]
+        assert history[0]["status"] == "LOST"
+        assert request(
+            f"/workers/{attempt['id']}/succeed",
+            {"result": {}},
+            expected_status=409,
+            headers=worker_headers,
+        ) == {"detail": "Conflicting outcome report"}
+
         compose("down")  # Retain the named PostgreSQL volume.
-        compose("up", "--wait", "--wait-timeout", "120", "api")
+        compose("up", "--wait", "--wait-timeout", "120", "api", "recovery")
         wait_for_api()
         assert request(path, headers=auth_headers) == created
+        assert request(abandoned_path, headers=auth_headers) == recovered
+        assert request(f"{abandoned_path}/attempts", headers=auth_headers) == history
         print(
             "Compose smoke check passed: migrated, ready, survived database outage, "
-            "created/read, recreated, preserved."
+            "created/read, recovered abandoned attempt, rejected late outcome, "
+            "recreated, preserved."
         )
     except Exception:
         compose("logs", "--no-color")

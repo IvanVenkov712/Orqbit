@@ -40,18 +40,20 @@ docker compose --env-file .env.compose config --quiet
 ## 2. Build, migrate, and start
 
 ```powershell
-docker compose --env-file .env.compose up --build --wait --wait-timeout 120 api
+docker compose --env-file .env.compose up --build --wait --wait-timeout 120 api recovery
 docker compose --env-file .env.compose ps --all
 Invoke-RestMethod -Uri "$api/health/live"
 Invoke-RestMethod -Uri "$api/health/ready"
 ```
 
-Compose waits for PostgreSQL, runs the one-shot Alembic migration service, and starts the API when migrations succeed. A successful migration container exits with code 0. Expect liveness `{"status":"ok"}` and readiness `{"status":"ready"}`. Readiness checks database access, migration heads, and every mapped table/column.
+Compose waits for PostgreSQL, runs the one-shot Alembic migration service, and starts the API and the separate recovery process when migrations succeed. Both reuse the backend image and settings. A successful migration container exits with code 0. Expect liveness `{"status":"ok"}` and readiness `{"status":"ready"}`. Readiness checks database access, migration heads, and every mapped table/column; it does not check the recovery process.
+
+Recovery runs `python -m recovery`, scanning up to `RECOVERY_BATCH_SIZE` expired running attempts per transaction and pausing `RECOVERY_INTERVAL_SECONDS` between scans (defaults: 1000 and 5 seconds). An expired attempt becomes `LOST` and its running job becomes `FAILED` in the same transaction. Jobs are not requeued or retried, and recovery does not populate an error payload. The service restarts automatically unless explicitly stopped. Include `recovery` when selecting services explicitly; an unqualified `docker compose --env-file .env.compose up --build --wait` includes it along with the frontend.
 
 If startup fails:
 
 ```powershell
-docker compose --env-file .env.compose logs db migrate api
+docker compose --env-file .env.compose logs db migrate api recovery
 ```
 
 An existing database with legacy jobs may need preparation before migration; see [migration notes](development.md#existing-databases).
@@ -96,7 +98,7 @@ The response includes the job ID, authenticated `user_id`, submitted parameters,
 
 ```powershell
 docker compose --env-file .env.compose down
-docker compose --env-file .env.compose up --wait --wait-timeout 120 api
+docker compose --env-file .env.compose up --wait --wait-timeout 120 api recovery
 Invoke-RestMethod -Uri "$api/health/ready"
 $after = Invoke-RestMethod -Uri "$api/jobs/$($job.id)" -Headers $headers
 if (($after | ConvertTo-Json -Depth 20 -Compress) -ne $expected) {
@@ -111,7 +113,32 @@ The volume preserves both the user and job. Keep the same signing key so unexpir
 docker compose --env-file .env.compose run --rm migrate
 ```
 
-## 6. Stop
+## 6. Verify an abandoned attempt
+
+Using the authenticated session and the still-pending `example` job above, register a worker and claim once without sending a heartbeat or outcome. This simulates a worker that stops immediately after claim:
+
+```powershell
+$worker = Invoke-RestMethod -Method Post -Uri "$api/workers" -Headers $headers -ContentType application/json -Body '{"name":"recovery-demo","supported_types":["example"],"permission_policy":"PRIVATE"}'
+$workerHeaders = @{ "X-API-Key" = $worker.secret_api_key }
+$attempt = Invoke-RestMethod -Method Post -Uri "$api/workers/claim" -Headers $workerHeaders
+$deadline = (Get-Date).AddSeconds(180)
+do {
+    $recovered = Invoke-RestMethod -Uri "$api/jobs/$($attempt.job_id)" -Headers $headers
+    if ($recovered.status -eq "FAILED") { break }
+    if ((Get-Date) -ge $deadline) { throw "Job did not reach FAILED within 180 seconds" }
+    Start-Sleep -Seconds 1
+} while ($true)
+$history = Invoke-RestMethod -Uri "$api/jobs/$($attempt.job_id)/attempts" -Headers $headers
+if ($history[0].id -ne $attempt.id -or $history[0].status -ne "LOST") {
+    throw "The abandoned attempt was not marked LOST"
+}
+$recovered
+$history
+```
+
+The 180-second bound assumes the default 120-second initial lease, 5-second scan interval, and no backlog. Increase it if you configured longer intervals. The job is `FAILED`, the attempt is `LOST`, and late success/failure reports for that attempt return 409. Reuse an existing worker's API key if its name is already registered.
+
+## 7. Stop
 
 ```powershell
 docker compose --env-file .env.compose down
@@ -121,4 +148,4 @@ Ordinary `down` retains the named database volume. Adding `--volumes` deletes th
 
 ## Automated verification
 
-Run `python backend/tests/compose_smoke.py` from the repository root to create a separate generated Compose project, register/log in a user, and test authenticated job persistence, migrations, database outage/reconnection, and container recreation. It supplies its own signing key and credentials and removes its own containers/volume afterward. It requires host Python and Docker, but no `.env.compose` file. See [testing](testing.md) for commands and [status](status.md#verification-performed) for recorded results; the revised manual commands have not been re-executed end to end against Docker during this documentation refresh.
+Run `python backend/tests/compose_smoke.py` from the repository root to create a separate generated Compose project, register/log in a user, and test authenticated job persistence, migrations, database outage/reconnection, abandoned-attempt recovery, late-outcome rejection, and container recreation. The check uses a 5-second lease and 1-second recovery interval, supplies its own signing key and credentials, and removes its own containers/volume afterward. It requires host Python and Docker, but no `.env.compose` file. See [testing](testing.md) for commands and [status](status.md#verification-performed) for earlier recorded results.

@@ -38,6 +38,16 @@ services:
       db:
         condition: service_healthy
 
+  recovery:
+    <<: *app
+    command: ["python", "-m", "recovery"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
   api:
     <<: *app
     ports:
