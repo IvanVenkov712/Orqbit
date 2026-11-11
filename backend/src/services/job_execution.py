@@ -28,6 +28,8 @@ class OutcomeConflict(Exception):
 class AttemptNotRunning(Exception):
     pass
 
+class LeaseExpired(Exception):
+    pass
 
 def claim_job(session: Session, worker: Worker) -> JobAttempt:
     stmt = (
@@ -71,6 +73,9 @@ def get_attempt(
         raise AttemptNotFound("Attempt not found")
 
     return attempt
+
+def validate_not_expired(attempt: JobAttempt):
+    
 
 
 def complete_job(
