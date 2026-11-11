@@ -201,18 +201,33 @@ def claim_worker(worker_factory):
 
 
 @pytest.fixture
-def claimed_attempt(client, database, claim_worker):
+def job_factory(user):
+    """Build unsaved jobs; callers control persistence and transactions."""
     from models.job import Job
 
+    def create_job(**overrides):
+        fields = {
+            "job_type": "example",
+            "params": {},
+            "user_id": user.id,
+            "idempotency_key": uuid4().hex,
+            "request_fingerprint": "test-fingerprint",
+        }
+        fields.update(overrides)
+        return Job(**fields)
+
+    return create_job
+
+
+@pytest.fixture
+def claimed_attempt(client, database, claim_worker, job_factory):
     worker, headers = claim_worker
     with Session(database) as session:
         session.add(
-            Job(
-                job_type="example",
+            job_factory(
                 params={"input": True},
                 user_id=worker.user_id,
                 idempotency_key="lease-test",
-                request_fingerprint="test-fingerprint",
             )
         )
         session.commit()

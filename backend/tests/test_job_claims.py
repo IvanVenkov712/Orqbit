@@ -1,7 +1,5 @@
 """Claims use authenticated workers and their stored supported types."""
 
-from uuid import uuid4
-
 import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -22,7 +20,7 @@ from models.worker import Worker
     ],
 )
 def test_claim_selects_only_supported_pending_jobs(
-    client, database, claim_worker, body
+    client, database, claim_worker, job_factory, body
 ):
     worker, headers = claim_worker
     with Session(database) as session:
@@ -36,28 +34,9 @@ def test_claim_selects_only_supported_pending_jobs(
         )
         session.add_all(
             [
-                Job(
-                    job_type="unsupported",
-                    params={},
-                    user_id=worker.user_id,
-                    idempotency_key=uuid4().hex,
-                    request_fingerprint="test-fingerprint",
-                ),
-                Job(
-                    job_type="example",
-                    params={},
-                    status=JobStatus.RUNNING,
-                    user_id=worker.user_id,
-                    idempotency_key=uuid4().hex,
-                    request_fingerprint="test-fingerprint",
-                ),
-                Job(
-                    job_type="example",
-                    params={},
-                    user_id=worker.user_id,
-                    idempotency_key=uuid4().hex,
-                    request_fingerprint="test-fingerprint",
-                ),
+                job_factory(job_type="unsupported"),
+                job_factory(status=JobStatus.RUNNING),
+                job_factory(),
             ]
         )
         session.commit()
@@ -93,20 +72,14 @@ def test_empty_queue_returns_404(client, claim_worker):
 
 
 def test_claim_without_stored_types_cannot_use_request_body(
-    client, database, claim_worker
+    client, database, claim_worker, job_factory
 ):
     worker, headers = claim_worker
     with Session(database) as session:
         session.execute(
             delete(SupportedJobType).where(SupportedJobType.worker_id == worker.id)
         )
-        job = Job(
-            job_type="example",
-            params={},
-            user_id=worker.user_id,
-            idempotency_key=uuid4().hex,
-            request_fingerprint="test-fingerprint",
-        )
+        job = job_factory()
         session.add(job)
         session.commit()
         job_id = job.id
@@ -121,28 +94,14 @@ def test_claim_without_stored_types_cannot_use_request_body(
         assert session.scalar(select(func.count()).select_from(JobAttempt)) == 0
 
 
-def test_claim_uses_updated_stored_types(client, database, claim_worker):
+def test_claim_uses_updated_stored_types(client, database, claim_worker, job_factory):
     worker, headers = claim_worker
     with Session(database) as session:
         session.get(Worker, worker.id).supported_types = [
             SupportedJobType(type_name="updated")
         ]
-        session.add(
-            Job(
-                job_type="example",
-                params={},
-                user_id=worker.user_id,
-                idempotency_key=uuid4().hex,
-                request_fingerprint="test-fingerprint",
-            )
-        )
-        eligible = Job(
-            job_type="updated",
-            params={},
-            user_id=worker.user_id,
-            idempotency_key=uuid4().hex,
-            request_fingerprint="test-fingerprint",
-        )
+        session.add(job_factory())
+        eligible = job_factory(job_type="updated")
         session.add(eligible)
         session.commit()
         eligible_id = eligible.id
