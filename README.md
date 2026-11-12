@@ -78,6 +78,8 @@ Follow the [backend roadmap](docs/roadmap.md) and [frontend roadmap](frontend/do
 
 ## Try Orqbit
 
+New to Orqbit? Follow the [step-by-step tutorial](tutorials/README.md) for a beginner-friendly walkthrough with screenshots, from installation and account setup to running workers, submitting jobs, and reading results.
+
 Start with the [Docker Compose quickstart](docs/quickstart.md) to run the API and PostgreSQL, authenticate, and submit a job. It requires Git and Docker in Linux-container mode; Python and PostgreSQL do not need to be installed on the host.
 
 Then follow the [example worker guide](examples/workers/add_numbers/README.md) to process an `add_numbers` job and retrieve its result. Interactive API documentation is available at `http://127.0.0.1:8000/docs` once the API is running.
