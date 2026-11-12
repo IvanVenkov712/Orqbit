@@ -52,6 +52,9 @@ The list returns a JSON array of `JobSummaryRead` objects containing only `id`, 
 | `status` | `PENDING`, `RUNNING`, `SUCCEEDED`, or `FAILED` |
 | `result`, `error` | JSON objects or null |
 | `attempt_ids` | IDs of persisted attempts |
+| `attempts_count` | Number of attempts started, initially 0; incremented atomically by each claim |
+| `max_attempts` | Total attempt budget saved from `MAX_ATTEMPTS` when the job is created, including the first attempt |
+| `available_at` | UTC-aware earliest claim time; a pending job can be waiting for its retry delay |
 | `created_at`, `updated_at` | UTC-aware creation and last-update timestamps in ISO 8601 format |
 
 Permission policies and permitted-ID lists are not currently included in job responses.
@@ -72,7 +75,7 @@ The response is a JSON array ordered by descending `attempt_number`. Pagination 
 | `result`, `error` | Persisted JSON-object outcome fields, or null when absent |
 | `created_at`, `updated_at` | Timezone-aware creation and last-update timestamps in ISO 8601 format |
 
-Running attempts have null result and error; succeeded attempts carry a result, and failed attempts carry an error. `updated_at` records the last update, including a persisted heartbeat renewal, not a dedicated execution-finished timestamp. Expiry does not automatically change persisted statuses to `LOST` or schedule retries. Historical terminal attempts migrated from before leases use `updated_at` as a synthetic lease deadline; see [migration notes](development.md#existing-databases).
+Running attempts have null result and error; succeeded attempts carry a result, and failed attempts carry an error. `updated_at` records the last update, including a persisted heartbeat renewal, not a dedicated execution-finished timestamp. The separate recovery process marks expired running attempts `LOST` and may schedule a retry; earlier attempts remain in this history. Historical terminal attempts migrated from before leases use `updated_at` as a synthetic lease deadline; see [migration notes](development.md#existing-databases).
 
 ### Permission policies
 
@@ -86,7 +89,7 @@ Submission requires `permission_policy`. `permitted_user_ids` and `permitted_wor
 | `PERMITTED_WORKERS_AND_USERS` | Either of the two grant types above applies |
 | `ALL` | Any authenticated user can read; any compatible authenticated worker can claim |
 
-Grant lists only apply to their corresponding policy. A worker must also support the job type and the job must be pending to be claimable.
+Grant lists only apply to their corresponding policy. A worker must also support the job type, and the job must be pending, due, and below its attempt limit to be claimable.
 
 ### Submission example
 
@@ -150,7 +153,7 @@ X-API-Key: <worker-api-key>
 
 Claim takes **no request body**. Job types come from the worker's stored capabilities; any supplied body, including the former `supported_types` field, is ignored. An empty compatible accessible queue returns **404**, `{"detail":"No jobs were found"}`. A worker with no stored types cannot claim work.
 
-A successful claim returns `id` (the attempt ID), `job_id`, `job_type`, `attempt_number` (currently 1), `status` (`RUNNING`), `params`, and `lease_expires_at`. PostgreSQL `FOR UPDATE SKIP LOCKED` selects the oldest eligible job by ID. The initial deadline is database time plus `LEASE_SECONDS` (example configuration: 120 seconds). The job update and attempt creation commit in one transaction before the response. An empty result can also mean eligible rows are temporarily locked by other claims.
+A successful claim returns `id` (the attempt ID), `job_id`, `job_type`, `attempt_number` (1 for the first execution, increasing on retries), `status` (`RUNNING`), `params`, and `lease_expires_at`. PostgreSQL `FOR UPDATE SKIP LOCKED` selects the oldest eligible job by ID, requiring `available_at <= database_now` and `attempts_count < max_attempts`. Under the job lock, claim increments `attempts_count` and uses that value for the new attempt number. The initial deadline is database time plus `LEASE_SECONDS` (example configuration: 120 seconds). The counter, job status, and attempt insert commit in one transaction before the response. An empty result can also mean jobs are waiting for their scheduled time or eligible rows are temporarily locked by other claims.
 
 The worker executes outside Orqbit, then sends one outcome:
 
@@ -159,7 +162,7 @@ The worker executes outside Orqbit, then sends one outcome:
 | POST | `/workers/{attempt_id}/succeed` | `{"result":{"message_id":"example-message-id"}}` | `{"Status":"200 OK"}` |
 | POST | `/workers/{attempt_id}/fail` | `{"error":{"code":"DELIVERY_FAILED","message":"Provider failure"}}` | `{"Status":"200 OK"}` |
 
-Both routes require the owning worker's API key. Use the returned attempt ID, not the job ID. Result/error must be JSON objects. The attempt is locked and checked for ownership. A first outcome requires `RUNNING` status and an unexpired lease, and updates the attempt together with its job. Repeating the accepted outcome with the same payload returns 200, `{"Status":"200 OK"}`, even after the recorded lease deadline, without changing stored values or timestamps. JSON object key order does not affect matching, and equivalent numeric representations such as `1` and `1.0` match; array order and boolean versus numeric values do affect matching. Changed payloads, contradictory outcomes, and reports against lost attempts return 409. No extra idempotency header is required. Success/failure are alternative terminal outcomes; failure does not schedule a retry. There is no API operation that automatically closes an expired attempt or requeues it.
+Both routes require the owning worker's API key. Use the returned attempt ID, not the job ID. Result/error must be JSON objects. The attempt is locked and checked for ownership. A first outcome requires the current `RUNNING` attempt of a running job, a matching attempt number/count, and an unexpired lease; it updates the attempt together with its job. Repeating the accepted outcome with the same payload returns 200, `{"Status":"200 OK"}`, even after the recorded lease deadline, without changing stored values or timestamps. JSON object key order does not affect matching, and equivalent numeric representations such as `1` and `1.0` match; array order and boolean versus numeric values do affect matching. Changed payloads, contradictory outcomes, and reports against lost attempts return 409. No extra idempotency header is required. A worker-reported failure remains terminal, even when the job has unused attempts. Recovery and retries are performed by the separate process described below.
 
 ### Attempt heartbeats and leases
 
@@ -182,7 +185,21 @@ Renewal sets the deadline to `max(existing_deadline, database_now + LEASE_EXTENS
 
 This is a per-attempt heartbeat, not a separate worker-process liveness signal. It renews only the addressed attempt. The [add_numbers worker](../examples/workers/add_numbers/README.md) and [delay worker](../examples/workers/delay/README.md) do not send heartbeats. The [delay_with_heartbeat worker](../examples/workers/delay_with_heartbeat/README.md) demonstrates execution beyond the initial lease and stops without reporting an outcome when ownership cannot be confirmed.
 
-Expiry currently blocks new outcomes and renewals but leaves both job and attempt persisted as `RUNNING`. There is no recovery process, automatic `LOST` transition, retry, or reassignment. A crashed worker or lost claim response can therefore leave a job stuck indefinitely. Workers should stop work cooperatively after losing their lease; lease validation cannot undo external side effects already performed. Hard execution deadlines are not implemented, so successful heartbeats can keep a running attempt leased indefinitely.
+Expiry immediately blocks new outcomes and renewals. Persisted states change when the separate recovery process scans the expired attempt. Workers should stop work cooperatively after losing their lease; lease validation cannot undo external side effects already performed. Hard execution deadlines are not implemented, so successful heartbeats can keep a running attempt leased indefinitely.
+
+### Recovery and bounded retries
+
+Run `python -m recovery` with `backend/src` on the Python import path, or start the Compose `recovery` service. Each scan processes at most `RECOVERY_BATCH_SIZE` expired running attempts (default 1000), then pauses for `RECOVERY_INTERVAL_SECONDS` (default 5). Recovery must be running for persisted expiry handling and retry scheduling; API readiness does not check it.
+
+Only lease expiry is retried automatically. A scan closes the old attempt as `LOST`. If its number matches the job's `attempts_count` and budget remains, recovery changes the running job to `PENDING` and sets `available_at` in the same transaction. Otherwise, a current attempt that exhausted the budget leaves the job `FAILED` with `error={"code":"attempts_exhausted","message":"Maximum attempts reached after lease expiry"}`. There is no retry of a reported `/fail` outcome and no manual retry endpoint.
+
+`MAX_ATTEMPTS` is an integer from 1 to 5, defaulting to 1. It includes the first execution, so 1 disables retries and 3 allows up to two retries. It is application configuration, not a job-submission field. Each job saves this limit at creation; configuration changes and matching submission replays do not reset an existing budget.
+
+After lost attempt number `n`, the fixed backoff is `min(10 * 2**(n - 1), 60)` seconds: 10, 20, 40, then 60 seconds. Recovery adds it to its database-time scan cutoff and persists `available_at`. This is the earliest claim time, not a promised execution time; scan delays, database contention, worker availability, and polling can delay execution. There is no jitter or configurable backoff policy in this version.
+
+Recovery does not create the next attempt. A later compatible, permitted worker claims it with a new attempt ID and the next number. Earlier attempts retain their ownership, parameters, timestamps, and outcomes. A late success/failure for a lost attempt returns 409 and its heartbeat returns 400, even when that worker owns the new attempt. Fresh reports before recovery still fail with 400 once the lease has expired. Exact replays of accepted outcomes remain unchanged and do not schedule work.
+
+An expired lease does not prove that the old worker stopped. Retried work can repeat external effects, so workers should deduplicate them using a stable job or business-operation key across attempts. Submission keys and attempt fencing do not provide exactly-once execution.
 
 ## Errors
 

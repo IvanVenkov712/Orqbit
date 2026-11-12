@@ -9,6 +9,7 @@ backend/
     config.py              Validated environment settings
     database.py            PostgreSQL engine and session dependency
     health.py              Read-only database/schema readiness checks
+    recovery.py            Separately runnable expiry recovery and retry scheduling
     models/                Jobs, users, workers, permissions, attempts, and timestamps
     dto/                   Pydantic requests and responses
     services/              Authentication, access rules, submission, and job lifecycle operations
@@ -22,7 +23,7 @@ backend/
   alembic.ini              Alembic configuration
   migrations/              Alembic environment and versioned schema changes
   tests/                   PostgreSQL tests and the separate Compose smoke script
-docker-compose.yml         PostgreSQL, migration, and API services
+docker-compose.yml         PostgreSQL, migration, API, recovery, and frontend services
 .env.compose.example       Local container configuration template
 .github/workflows/ci.yml    Checks on pushes and pull requests
 docs/                      Current status and proposed implementation design
@@ -54,6 +55,7 @@ Edit `backend/.env` before continuing:
 - Set `DATABASE_URL=postgresql+psycopg://postgres:YOUR_PASSWORD@localhost:5432/orqbit`, replacing the user and password with your local credentials. URL-encode reserved characters in the password.
 - Replace `SECRET_KEY=replace_with_secret_key` with the generated 64-character lowercase hexadecimal value. Keep an existing valid key when reusing your configuration.
 - Retain the other example settings: `LEASE_SECONDS=120`, `LEASE_EXTENSION_SECONDS=60`, `ALGORITHM=HS256`, and `ACCESS_TOKEN_EXPIRE_MINUTES=30`. The three timing settings must be positive. `LEASE_SECONDS` sets the initial attempt lease; `LEASE_EXTENSION_SECONDS` sets the window from the current database time on renewal. Rename the former `PROTRACTION_SECONDS` setting in existing environment files; no compatibility alias is provided.
+- `MAX_ATTEMPTS` sets the total attempts for each new job, including the first. Keep 1 to disable retries, or choose 2-5 to retry lost attempts. Restart local processes after changing configuration; existing jobs retain their saved budget. See [retry semantics](api.md#recovery-and-bounded-retries).
 
 The real environment files are ignored by Git.
 
@@ -88,7 +90,14 @@ Clients submit with a required creator-scoped `Idempotency-Key`; matching retrie
 
 Claims use a PostgreSQL transaction with `FOR UPDATE SKIP LOCKED`; claiming creates an attempt with an initial lease and marks the job running in that transaction. Heartbeats and outcome reports lock the attempt and check worker ownership, running status, and lease expiry using PostgreSQL `clock_timestamp()` after locking. Heartbeat renewal cannot shorten the current deadline. An accepted outcome updates job and attempt together; an exact replay remains supported after the lease deadline. See the [API reference](api.md#attempt-heartbeats-and-leases) for the protocol and error responses. These operations coordinate work; the API does not execute worker handlers.
 
-Lease recovery and retries remain planned. Expiry rejects new heartbeats and outcomes but does not change the stored `RUNNING` status or requeue a job. A crashed worker can leave a job running indefinitely. Separate worker-process liveness and hard execution deadlines are not implemented. There is no exactly-once execution guarantee. Future retries will require idempotent worker side effects; submission deduplication alone cannot prevent a worker from repeating an external action.
+Run recovery in another terminal from `backend/`, using the same configuration:
+
+```powershell
+$env:PYTHONPATH = "src"
+uv run --locked python -m recovery
+```
+
+Expiry rejects new heartbeats and outcomes immediately. The recovery process closes expired attempts as `LOST` and atomically schedules a delayed retry or fails the job when its saved attempt budget is exhausted. Without recovery running, expired jobs stay stored as `RUNNING`. Worker-reported failures are terminal. Separate worker-process liveness and hard execution deadlines are not implemented. Retried handlers need idempotent external actions; submission deduplication alone cannot prevent repeated effects. See [recovery and bounded retries](api.md#recovery-and-bounded-retries).
 
 ## Existing databases
 
@@ -99,6 +108,8 @@ Migration `476550d0c277` adds users, workers, permissions, and attempts. It refu
 Migration `4610066358ca` adds required submission keys and request fingerprints, unique per creator and key. Existing jobs receive synthetic `legacy-job:<job_id>` keys and a `legacy` fingerprint marker; they retain their data but cannot replay their original submissions. See the [API reference](api.md#jobs) for the current submission contract.
 
 Migration `43dcc043466c` adds the required timezone-aware `job_attempts.lease_expires_at` column. It locks the attempts table and refuses to upgrade if any legacy attempt is `RUNNING`; stop new claims and resolve those attempts before upgrading. Existing `SUCCEEDED`, `FAILED`, and `LOST` attempts retain their data and receive `updated_at` as a synthetic deadline, since their real lease deadlines were never recorded. The column is added nullable, backfilled, and then made non-nullable without a database default. A rejected upgrade rolls back without changing the revision or schema. Downgrade removes the column and its lease values.
+
+Migration `a7d77c0723e0` adds `jobs.max_attempts`, `attempts_count`, and `available_at`. It locks jobs and attempts while backfilling `attempts_count` from the highest saved attempt number (0 without attempts), then sets `max_attempts` to `GREATEST(1, attempts_count)`. Existing jobs receive no extra retry budget, regardless of current settings. The counters become non-nullable and receive checks for a positive limit and a count between 0 and that limit. `available_at` uses PostgreSQL `clock_timestamp()` for existing and new rows. Job and attempt history remains intact; downgrade removes the checks and these three columns.
 
 ## PostgreSQL integration tests
 
@@ -119,6 +130,7 @@ The services are:
 | `db` | PostgreSQL 18 with UTC sessions, a `pg_isready` health check, and a named `postgres_data` volume mounted at `/var/lib/postgresql`, the volume location used by PostgreSQL 18 images |
 | `migrate` | Uses the API image, waits for a healthy database, runs `alembic upgrade head`, and exits |
 | `api` | Uses the same image, waits for a healthy database and successful migrations, and runs Uvicorn on port 8000 without reload |
+| `recovery` | Uses the same image and settings, waits for the database and migrations, and runs `python -m recovery` with automatic process restart |
 
 The host API port defaults to `127.0.0.1:8000`; set `API_PORT` to change it. The database port is not published to the host. Startup gating uses Compose's `service_healthy` and `service_completed_successfully` conditions ([Docker documentation](https://docs.docker.com/compose/how-tos/startup-order/)). The shared image receives application configuration at runtime through environment variables.
 
@@ -128,9 +140,9 @@ From the repository root:
 Copy-Item .env.compose.example .env.compose
 # Configure database credentials and a generated SECRET_KEY before starting.
 docker compose --env-file .env.compose config --quiet
-docker compose --env-file .env.compose up --build --wait --wait-timeout 120 api
+docker compose --env-file .env.compose up --build --wait --wait-timeout 120 api recovery
 docker compose --env-file .env.compose ps --all
-docker compose --env-file .env.compose logs migrate api
+docker compose --env-file .env.compose logs migrate api recovery
 ```
 
 The startup command automatically runs the separate migration service and waits for the API's `/health/ready` health check. The [clean-checkout guide](quickstart.md) gives the complete manual build/migrate/start and persistence demonstration. To run migration operations explicitly using the built image:
@@ -140,11 +152,11 @@ docker compose --env-file .env.compose run --rm migrate
 docker compose --env-file .env.compose run --rm migrate alembic current
 ```
 
-Use `up --build --wait --wait-timeout 120 api` after code or migration changes. `restart` does not rebuild the image or apply new migrations. Normal `down` retains the database volume. `down --volumes` deletes it and all stored jobs. Credentials in `.env.compose` initialize a new database volume; changing them later does not change credentials inside an existing database.
+Use `up --build --wait --wait-timeout 120 api recovery` after code, configuration, or migration changes. `restart` does not rebuild the image, refresh container environment variables, or apply new migrations. Normal `down` retains the database volume. `down --volumes` deletes it and all stored jobs. Credentials in `.env.compose` initialize a new database volume; changing them later does not change credentials inside an existing database.
 
 For the automated container check, see the [Compose smoke check](testing.md#docker-compose-smoke-check).
 
-There is no recovery executable or service yet. The PostgreSQL health check and migration dependency control initial startup; the API health check continues checking database/schema readiness after startup. An unhealthy container is reported as such; Docker Compose does not automatically restart it solely because a health check fails.
+The PostgreSQL health check and migration dependency control initial startup; the API health check continues checking database/schema readiness after startup. It does not check recovery-process liveness. An unhealthy container is reported as such; Docker Compose does not automatically restart it solely because a health check fails.
 
 ## Validation strategy
 

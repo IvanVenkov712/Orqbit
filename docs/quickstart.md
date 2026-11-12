@@ -28,6 +28,8 @@ $rng.Dispose()
 
 Replace `SECRET_KEY=replace_with_secret_key` in `.env.compose` with that output. It must be 64 lowercase hexadecimal characters. Keep `ALGORITHM=HS256` and a positive `ACCESS_TOKEN_EXPIRE_MINUTES` (the example uses 30). Keep positive `LEASE_SECONDS=120` for the initial attempt lease and `LEASE_EXTENSION_SECONDS=60` for the heartbeat renewal window. In existing files, rename `PROTRACTION_SECONDS` to `LEASE_EXTENSION_SECONDS`; Compose no longer reads the old name. See the [lease protocol](api.md#attempt-heartbeats-and-leases) for expiry and renewal behavior. The real environment file is ignored by Git and excluded from the image.
 
+Keep `MAX_ATTEMPTS=1` for this walkthrough, including its terminal-failure demonstration in step 6. To enable retries for new jobs, set it to an integer from 2 to 5 (for example, `MAX_ATTEMPTS=3` allows the first execution plus two retries) and run the startup command below again to recreate the API and recovery services with that setting. Existing jobs retain their saved limit. Only lost attempts are retried; a worker-reported failure remains terminal. See [recovery and bounded retries](api.md#recovery-and-bounded-retries) for scheduling and ownership rules.
+
 Set the URL to match `API_PORT` in the file, then validate Compose interpolation:
 
 ```powershell
@@ -48,7 +50,7 @@ Invoke-RestMethod -Uri "$api/health/ready"
 
 Compose waits for PostgreSQL, runs the one-shot Alembic migration service, and starts the API and the separate recovery process when migrations succeed. Both reuse the backend image and settings. A successful migration container exits with code 0. Expect liveness `{"status":"ok"}` and readiness `{"status":"ready"}`. Readiness checks database access, migration heads, and every mapped table/column; it does not check the recovery process.
 
-Recovery runs `python -m recovery`, scanning up to `RECOVERY_BATCH_SIZE` expired running attempts per transaction and pausing `RECOVERY_INTERVAL_SECONDS` between scans (defaults: 1000 and 5 seconds). An expired attempt becomes `LOST` and its running job becomes `FAILED` in the same transaction. Jobs are not requeued or retried, and recovery does not populate an error payload. The service restarts automatically unless explicitly stopped. Include `recovery` when selecting services explicitly; an unqualified `docker compose --env-file .env.compose up --build --wait` includes it along with the frontend.
+Recovery runs `python -m recovery`, scanning up to `RECOVERY_BATCH_SIZE` expired running attempts per transaction and pausing `RECOVERY_INTERVAL_SECONDS` between scans (defaults: 1000 and 5 seconds). An expired attempt becomes `LOST`; its job becomes `PENDING` with a delayed `available_at` when budget remains, or `FAILED` with an `attempts_exhausted` error when the limit is reached. Both changes commit together. The service restarts automatically unless explicitly stopped. Include `recovery` when selecting services explicitly; an unqualified `docker compose --env-file .env.compose up --build --wait` includes it along with the frontend.
 
 If startup fails:
 
@@ -115,7 +117,7 @@ docker compose --env-file .env.compose run --rm migrate
 
 ## 6. Verify an abandoned attempt
 
-Using the authenticated session and the still-pending `example` job above, register a worker and claim once without sending a heartbeat or outcome. This simulates a worker that stops immediately after claim:
+Using the authenticated session and the still-pending `example` job above, register a worker and claim once without sending a heartbeat or outcome. This simulates a worker that stops immediately after claim. This demonstration requires that the job was created with `max_attempts=1`; otherwise it becomes pending for a retry instead of reaching terminal failure after the first lost attempt:
 
 ```powershell
 $worker = Invoke-RestMethod -Method Post -Uri "$api/workers" -Headers $headers -ContentType application/json -Body '{"name":"recovery-demo","supported_types":["example"],"permission_policy":"PRIVATE"}'

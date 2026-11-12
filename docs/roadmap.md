@@ -6,8 +6,8 @@ This roadmap contains remaining work only. The [status page](status.md) records 
 | --- | --- |
 | Identity and access management | Separate process identity, credential rotation/revocation management, and tenant-isolation requirements |
 | Coordination hardening | Competing outcome-report regression tests and API-query timeout policy |
-| Heartbeats, deadlines, recovery | Worker-process liveness, hard deadlines, recovery, and example-worker heartbeat support |
-| Retries and history extensions | Retry scheduling, retry-exhaustion filtering, timeout reasons, and durations |
+| Heartbeats, deadlines, recovery | Worker-process liveness, hard deadlines, draining, and recovery observability |
+| Retries and history extensions | Transient-error classification, jitter, retry-exhaustion filtering, timeout reasons, and durations |
 | Operations | Metrics, resource limits, load tests, backup/restore, and retention policies |
 
 ## 1. Identity and access management
@@ -24,13 +24,13 @@ Add competing success/failure report regression tests and define a deliberate AP
 
 ## 3. Heartbeats, deadlines, and crash recovery
 
-Build on the implemented per-attempt leases, authenticated renewal, and rejection of expired heartbeats/outcomes. Add worker-process liveness, process-instance fencing, hard attempt deadlines, and an independently runnable recovery process. Make recovery safe across multiple instances. Add graceful worker draining and extend the existing example worker to demonstrate heartbeats and cooperative lease-loss handling.
+Build on the implemented per-attempt leases, authenticated renewal, separate recovery process, and rejection of expired or lost-attempt reports. Add worker-process liveness, process-instance fencing, hard attempt deadlines, and graceful worker draining. Extend resilience demonstrations and recovery observability beyond the current PostgreSQL contention tests.
 
-**Done when:** killing a worker, dropping its network connection, or restarting API/recovery processes leaves no permanently orphaned job; stale acknowledgements and late heartbeats are rejected. Extend the existing heartbeat/outcome and expiry-after-lock tests to cover races with recovery and reassignment. Recovery latency and oldest expired-lease age are observable.
+**Done when:** killing a worker, dropping its network connection, or restarting API/recovery processes leaves no permanently orphaned job; stale acknowledgements and late heartbeats are rejected. Supplement the existing PostgreSQL contention and reassignment tests with live worker-failure and service-restart demonstrations. Recovery latency and oldest expired-lease age are observable.
 
 ## 4. Retry policy and history extensions
 
-Add retryability classification, maximum attempts, capped backoff with jitter, persisted `available_at`, and optional job deadlines. Claims must select only jobs whose scheduled time is due. Close the old attempt and schedule the next execution in one transaction. Add filtering for jobs that exhausted their retry budgets and extend attempt history with timeout reasons and durations.
+The current [bounded retry policy](api.md#recovery-and-bounded-retries) already handles lost attempts, saved attempt limits, capped backoff, due-only claims, and atomic retry scheduling with preserved history. Extend it with retryability classification for reported failures, jitter, and optional job deadlines. Add filtering for jobs that exhausted their retry budgets and extend attempt history with timeout reasons and durations.
 
 **Done when:** transient failures recover after the configured delay; permanent errors and exhausted budgets stop; restart does not reset retry timing/counts; crashes/timeouts count toward the budget; no prior outcome is overwritten. Demonstrate idempotent external actions in the example worker.
 
