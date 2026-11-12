@@ -1,10 +1,12 @@
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import AwareDatetime
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 
 from database import SessionDep
 from dto.worker import WorkerCreate, WorkerCreateResponse, WorkerRead
 from models.supported_types import SupportedJobType
+from models.user import User
 from models.worker import Worker
 from services.user_auth import CurrentUser
 from services.worker import (
@@ -51,23 +53,42 @@ def list_workers(
     user: CurrentUser,
     session: SessionDep,
     owner_id: int | None = None,
+    owner_username: str | None = Query(None, min_length=1, max_length=16),
     job_type: str | None = None,
+    active: bool | None = None,
+    created_from: AwareDatetime | None = None,
+    created_before: AwareDatetime | None = None,
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
+    if created_from is not None and created_before is not None and created_from >= created_before:
+        raise HTTPException(422, "created_from must be earlier than created_before")
     stmt = accessible_workers_query(user)
 
     if owner_id is not None:
         stmt = stmt.where(Worker.user_id == owner_id)
+
+    if owner_username is not None:
+        stmt = stmt.where(Worker.user.has(User.username == owner_username))
 
     if job_type is not None:
         stmt = stmt.where(
             Worker.supported_types.any(SupportedJobType.type_name == job_type)
         )
 
+    if active is not None:
+        stmt = stmt.where(Worker.active == active)
+
+    if created_from is not None:
+        stmt = stmt.where(Worker.created_at >= created_from)
+
+    if created_before is not None:
+        stmt = stmt.where(Worker.created_at < created_before)
+
     stmt = stmt.order_by(Worker.id.desc()).offset(offset).limit(limit)
 
     stmt = stmt.options(
+        joinedload(Worker.user).load_only(User.username),
         selectinload(Worker.supported_types),
         selectinload(Worker.permitted_users),
     )

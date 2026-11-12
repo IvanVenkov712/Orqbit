@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import (
+    AliasPath,
     BaseModel,
     ConfigDict,
     Field,
@@ -30,6 +31,7 @@ class JobSummaryRead(BaseModel):
 
     id: int
     user_id: int
+    owner_username: str = Field(validation_alias=AliasPath("user", "username"))
     job_type: str
     status: JobStatus
     created_at: datetime
@@ -41,6 +43,7 @@ class JobRead(BaseModel):
 
     id: int
     user_id: int
+    owner_username: str = Field(validation_alias=AliasPath("user", "username"))
     job_type: str
     params: dict[str, Any]
     result: dict[str, Any] | None = None

@@ -20,6 +20,7 @@ class WorkerRead(WorkerBase):
     id: PositiveInt
     active: bool
     user_id: int
+    owner_username: str
     
     model_config = ConfigDict(from_attributes=True)
     

@@ -1,5 +1,7 @@
 """Worker registration, credential secrecy, and permission-aware discovery."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -11,6 +13,80 @@ from models.user import User
 from models.worker import PermissionPolicy, Worker
 from models.worker_permitted_users import WorkerPermittedUser
 from services.worker_auth import hash_api_key
+
+
+@pytest.mark.parametrize("owner_filter", ["owner_id", "owner_username"])
+def test_worker_creation_and_active_filters_preserve_access_and_pagination(
+    client, database, user, user_headers, owner_filter
+):
+    start = datetime(2026, 11, 10, tzinfo=UTC)
+    with Session(database) as session:
+        owner = User(
+            username="other-owner", email="other@example.com",
+            full_name="Other", hashed_password="unused",
+        )
+        session.add(owner)
+        session.flush()
+        workers = []
+        for index, (policy, hours, job_type, active) in enumerate([
+            (PermissionPolicy.ALL, -1, "example", False),
+            (PermissionPolicy.ALL, 0, "example", False),
+            (PermissionPolicy.PERMITTED_USERS, 1, "example", False),
+            (PermissionPolicy.PRIVATE, 2, "example", False),
+            (PermissionPolicy.ALL, 3, "other", False),
+            (PermissionPolicy.ALL, 4, "example", True),
+            (PermissionPolicy.ALL, 5, "example", False),
+        ]):
+            worker = Worker(
+                name=f"filtered-{index}", user_id=owner.id, active=active,
+                permission_policy=policy, secret_api_key_hash=f"unused-{index}",
+                created_at=start + timedelta(hours=hours),
+                supported_types=[SupportedJobType(type_name=job_type)],
+                permitted_users=[session.get(User, user.id)]
+                if policy == PermissionPolicy.PERMITTED_USERS else [],
+            )
+            session.add(worker)
+            workers.append(worker)
+        session.commit()
+        owner_id = owner.id
+        expected = [workers[2].id, workers[1].id]
+        active_id = workers[5].id
+
+    filters = {
+        owner_filter: owner_id if owner_filter == "owner_id" else "other-owner",
+        "job_type": "example", "active": "false",
+        "created_from": "2026-11-10T02:00:00+02:00",
+        "created_before": (start + timedelta(hours=5)).isoformat(),
+    }
+    response = client.get("/workers", headers=user_headers, params=filters)
+    assert response.status_code == 200
+    assert [worker["id"] for worker in response.json()] == expected
+    assert all(worker["owner_username"] == "other-owner" for worker in response.json())
+    response = client.get(
+        "/workers", headers=user_headers, params={**filters, "limit": 1, "offset": 1}
+    )
+    assert [worker["id"] for worker in response.json()] == expected[1:]
+    response = client.get(
+        "/workers", headers=user_headers, params={**filters, "active": "true"}
+    )
+    assert [worker["id"] for worker in response.json()] == [active_id]
+    del filters["active"]
+    response = client.get("/workers", headers=user_headers, params=filters)
+    assert [worker["id"] for worker in response.json()] == [active_id, *expected]
+    for username in ("missing-owner", "other", "other%", "OTHER-OWNER"):
+        response = client.get(
+            "/workers", headers=user_headers,
+            params={**filters, "owner_username": username},
+        )
+        assert response.status_code == 200
+        assert response.json() == []
+    details = client.get(f"/workers/{expected[0]}", headers=user_headers)
+    assert details.json()["owner_username"] == "other-owner"
+
+
+def test_list_workers_rejects_invalid_active_filter(client, user_headers):
+    response = client.get("/workers", headers=user_headers, params={"active": "LOST"})
+    assert response.status_code == 422
 
 
 def test_registered_worker_key_claims_and_is_not_exposed_by_reads(
@@ -30,6 +106,7 @@ def test_registered_worker_key_claims_and_is_not_exposed_by_reads(
     key = created.pop("secret_api_key")
     assert key.startswith("oqb_")
     assert created["user_id"] == user.id
+    assert created["owner_username"] == user.username
     assert created["supported_types"] == ["example"]
     with Session(database) as session:
         stored = session.get(Worker, created["id"])

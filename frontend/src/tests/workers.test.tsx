@@ -8,9 +8,66 @@ import {
 
 setupAppTests()
 
-test('lists only the current user workers with metadata and no API keys', async () => {
+test('opens an accessible worker belonging to another owner without exposing credentials', async () => {
+  mockApi(async (path) => path === '/api/workers/17'
+    ? response({ ...worker, user_id: 888, owner_username: 'other-owner', name: 'shared-worker', secret_api_key: 'never-show-key' }) : undefined)
+  await enterApp('/workers/17')
+  const details = await screen.findByRole('region', { name: 'Worker metadata' })
+  expect(details.textContent).toContain('shared-worker')
+  expect(details.textContent).toContain('other-owner')
+  expect(details.textContent).not.toContain('User #888')
+  expect(details.textContent).not.toContain('demo-user (you)')
+  expect(details.textContent).not.toContain('never-show-key')
+})
+
+test('combines worker owner, type, registration status and creation filters before pagination', async () => {
+  await enterApp('/workers?offset=20&view=shared')
+  await screen.findByRole('table', { name: 'Registered workers' })
+  const from = '2026-11-10T10:00:00'
+  const before = '2026-11-11T10:00:00'
+  fireEvent.change(screen.getByLabelText('Owner username'), { target: { value: 'other-owner' } })
+  fireEvent.change(screen.getByLabelText('Supported job type'), { target: { value: 'sum & more' } })
+  fireEvent.change(screen.getByLabelText('Credential/registration status'), { target: { value: 'false' } })
+  fireEvent.change(screen.getByLabelText('Created from'), { target: { value: from } })
+  fireEvent.change(screen.getByLabelText('Created before'), { target: { value: before } })
+  fireEvent.submit(screen.getByRole('form', { name: 'Filter workers' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => {
+    const query = new URL(String(path), 'http://localhost').searchParams
+    return query.get('owner_username') === 'other-owner' && !query.has('owner_id') && query.get('job_type') === 'sum & more'
+      && query.get('active') === 'false' && query.get('offset') === '0'
+      && query.get('created_from') === new Date(from).toISOString()
+      && query.get('created_before') === new Date(before).toISOString()
+  })).toBe(true))
+  expect(new URLSearchParams(window.location.search).has('offset')).toBe(false)
+  const filteredUrl = window.location.search
+  await act(async () => { window.history.back() })
+  await waitFor(() => expect((screen.getByLabelText('Owner username') as HTMLInputElement).value).toBe(''))
+  await act(async () => { window.history.forward() })
+  await waitFor(() => expect((screen.getByLabelText('Owner username') as HTMLInputElement).value).toBe('other-owner'))
+  cleanup()
+  render(<App />)
+  await screen.findByRole('table', { name: 'Registered workers' })
+  expect(window.location.search).toBe(filteredUrl)
+  expect((screen.getByLabelText('Owner username') as HTMLInputElement).value).toBe('other-owner')
+  expect((screen.getByLabelText('Credential/registration status') as HTMLSelectElement).value).toBe('false')
+  fireEvent.click(screen.getByRole('link', { name: 'Clear filters' }))
+  await waitFor(() => expect(window.location.search).toBe(''))
+})
+
+test('shows an empty list for an unknown owner username', async () => {
+  mockApi(async (path) => String(path).startsWith('/api/workers?') ? response([]) : undefined)
+  await enterApp('/workers?owner_username=missing-owner')
+  await screen.findByText('No accessible workers match these filters.')
+  expect((screen.getByLabelText('Owner username') as HTMLInputElement).value).toBe('missing-owner')
+  expect(screen.queryByLabelText('Owner ID')).toBeNull()
+  const query = new URL(String(fetchMock.mock.calls.find(([path]) => String(path).startsWith('/api/workers?'))![0]), 'http://localhost').searchParams
+  expect(query.get('owner_username')).toBe('missing-owner')
+  expect(query.has('owner_id')).toBe(false)
+})
+
+test('lists accessible workers across owners with metadata and no API keys', async () => {
   mockApi(async (path) => String(path).startsWith('/api/workers?')
-    ? response([{ ...worker, secret_api_key: 'never-show-key', secret_api_key_hash: 'never-show-hash' }, { ...worker, id: 18, user_id: 99, name: 'other-owner' }])
+    ? response([{ ...worker, secret_api_key: 'never-show-key', secret_api_key_hash: 'never-show-hash' }, { ...worker, id: 18, user_id: 99, owner_username: 'other-owner', name: 'shared-worker' }])
     : undefined)
   await enterApp('/workers')
   const table = await screen.findByRole('table', { name: 'Registered workers' })
@@ -19,10 +76,11 @@ test('lists only the current user workers with metadata and no API keys', async 
   expect(table.textContent).toContain('Credential/registration status')
   expect(table.textContent).toContain('Active')
   expect(table.textContent).toContain('Private')
-  expect(table.textContent).not.toContain('other-owner')
+  expect(table.textContent).toContain('other-owner')
+  expect(table.textContent).not.toContain('User #99')
   expect(document.body.textContent).not.toMatch(/never-show-key|never-show-hash/)
   expect(screen.getByText(/does not establish that a worker process is online/)).toBeTruthy()
-  expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers?owner_id=7&limit=20&offset=0')).toBe(true)
+  expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers?limit=20&offset=0')).toBe(true)
   fireEvent.click(screen.getByRole('link', { name: worker.name }))
   const details = await screen.findByRole('region', { name: 'Worker metadata' })
   expect(details.textContent).toContain('#17')
@@ -32,8 +90,8 @@ test('lists only the current user workers with metadata and no API keys', async 
 })
 
 test.each([
-  ['/workers', 'You have no registered workers yet.'],
-  ['/workers?job_type=unknown', 'None of your workers support this job type.'],
+  ['/workers', 'No accessible workers match these filters.'],
+  ['/workers?job_type=unknown', 'No accessible workers match these filters.'],
   ['/workers?offset=20', 'No more workers on this page.'],
 ])('shows a useful empty worker state at %s', async (path, message) => {
   mockApi(async (path) => String(path).startsWith('/api/workers?') ? response([]) : undefined)
@@ -60,7 +118,7 @@ test('preserves worker type filters, pages and unrelated parameters across navig
   expect(window.location.search).toBe('?job_type=add_numbers&offset=20&view=mine')
   fireEvent.change(screen.getByLabelText('Supported job type'), { target: { value: 'sum & more' } })
   fireEvent.submit(screen.getByRole('form', { name: 'Filter workers' }))
-  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers?owner_id=7&limit=20&offset=0&job_type=sum+%26+more')).toBe(true))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers?limit=20&offset=0&job_type=sum+%26+more')).toBe(true))
   expect(window.location.search).toBe('?job_type=sum+%26+more&view=mine')
   await act(async () => { window.history.back() })
   await waitFor(() => expect(window.location.search).toBe('?job_type=add_numbers&offset=20&view=mine'))
@@ -80,7 +138,7 @@ test('preserves worker type filters, pages and unrelated parameters across navig
 test.each(['-1', 'invalid', '1.5', '9007199254740992'])('normalizes invalid worker offset %s before requesting', async (offset) => {
   await enterApp(`/workers?offset=${offset}`)
   await screen.findByRole('table', { name: 'Registered workers' })
-  expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers?owner_id=7&limit=20&offset=0')).toBe(true)
+  expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers?limit=20&offset=0')).toBe(true)
 })
 
 test.each(['/workers', '/workers/17'])('shows worker loading and failure states with manual retry at %s', async (route) => {
@@ -105,9 +163,9 @@ test.each(['not-a-number', '0', '-1', '9007199254740992'])('rejects invalid work
   expect(fetchMock.mock.calls.some(([path]) => String(path).startsWith('/api/workers'))).toBe(false)
 })
 
-test.each(['missing', 'inaccessible', 'other-owner'])('hides worker details when %s', async (reason) => {
+test.each(['missing', 'inaccessible'])('hides worker details when %s', async (reason) => {
   mockApi(async (path) => path === '/api/workers/17'
-    ? reason === 'other-owner' ? response({ ...worker, user_id: 888, name: 'hidden-worker' }) : response({ detail: 'Worker not found' }, reason === 'missing' ? 404 : 403)
+    ? response({ detail: 'Worker not found' }, reason === 'missing' ? 404 : 403)
     : undefined)
   await enterApp('/workers/17')
   await screen.findByRole('heading', { name: 'Worker unavailable' })
@@ -288,7 +346,7 @@ test('refreshes the owned worker list after registration', async () => {
     if (String(path).startsWith('/api/workers?')) return response(registered ? [worker] : [])
   })
   await enterApp('/workers')
-  await screen.findByText('You have no registered workers yet.')
+  await screen.findByText('No accessible workers match these filters.')
   fireEvent.click(screen.getByRole('link', { name: 'Register a worker' }))
   fillWorkerRegistration()
   await screen.findByLabelText('New worker API key')
@@ -302,7 +360,8 @@ test('discards worker records across accounts', async () => {
   await screen.findByRole('region', { name: 'Worker metadata' })
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
   await screen.findByRole('heading', { name: 'Sign in' })
-  mockApi(async (path) => path === '/api/users/me/' ? response({ ...user, id: 888 }) : undefined)
+  mockApi(async (path) => path === '/api/users/me/' ? response({ ...user, id: 888 })
+    : path === '/api/workers/17' ? response({ detail: 'Worker not found' }, 404) : undefined)
   fillLogin()
   await screen.findByRole('heading', { name: 'Worker unavailable' })
   expect(screen.queryByRole('region', { name: 'Worker metadata' })).toBeNull()

@@ -8,6 +8,7 @@ type JobStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
 type Job = {
   id: number
   user_id: number
+  owner_username: string
   job_type: string
   status: JobStatus
   params: Record<string, unknown>
@@ -44,7 +45,6 @@ export function JobDetailsPage({ history = false }: { history?: boolean }) {
     enabled: validId && !!user,
     queryFn: async ({ signal }) => {
       const job = await request<Job>(`/jobs/${jobId}`, { signal })
-      if (job.user_id !== user?.id) throw new ApiError('Job unavailable', 404)
       // Fetch history after the job so a terminal snapshot includes its final attempt.
       let attempts: Attempt[] = []
       let attemptsError: string | null = null
@@ -82,7 +82,7 @@ export function JobDetailsPage({ history = false }: { history?: boolean }) {
     </div>
     {unavailable ? <section className={styles.placeholder}>
       <h2>Job unavailable</h2>
-      <p>This job could not be found or is not one of your jobs. Check the link or sign in with the account that submitted it.</p>
+      <p>This job could not be found or you do not have permission to view it.</p>
     </section> : details.isError ? <section className={styles.placeholder}>
       <h2>Unable to load this job</h2>
       <p role="alert">{details.error instanceof ApiError ? details.error.message : 'Please try again.'}</p>
@@ -93,7 +93,7 @@ export function JobDetailsPage({ history = false }: { history?: boolean }) {
         <p role="status">{statusLabels[job.status]}</p>
         <dl className={styles.metadata}>
           <div><dt>Job</dt><dd>#{job.id}</dd></div>
-          <div><dt>Creator</dt><dd>{user?.username} (you)</dd></div>
+          <div><dt>Creator</dt><dd>{job.owner_username}{job.user_id === user?.id ? ' (you)' : ''}</dd></div>
           <div><dt>Type</dt><dd>{job.job_type}</dd></div>
         </dl>
       </section>
@@ -117,6 +117,7 @@ export function JobDetailsPage({ history = false }: { history?: boolean }) {
           {(history ? attempts : attempts.slice(0, 1)).map((attempt) => <article className={styles.attempt} key={attempt.id} aria-label={`Attempt ${attempt.attempt_number}`}>
             <h3>Attempt {attempt.attempt_number}</h3>
             <p>{statusLabels[attempt.status]}</p>
+            {attempt.status === 'LOST' && <p>The execution lease expired without a reported outcome. This attempt can no longer report a result.</p>}
             <dl className={styles.metadata}>
               <div><dt>Started</dt><dd><time dateTime={attempt.created_at}>{new Date(attempt.created_at).toLocaleString()}</time></dd></div>
               <div><dt>Last updated</dt><dd><time dateTime={attempt.updated_at}>{new Date(attempt.updated_at).toLocaleString()}</time></dd></div>

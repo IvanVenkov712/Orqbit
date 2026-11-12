@@ -7,8 +7,113 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 
-from models.job import Job, JobStatus
+from models.job import Job, JobStatus, PermissionPolicy
 from models.job_attempts import AttemptStatus, JobAttempt
+from models.user import User
+
+
+@pytest.mark.parametrize("owner_filter", ["owner_id", "owner_username"])
+def test_job_creation_and_lost_attempt_filters_preserve_access_and_pagination(
+    client, database, user, user_headers, claim_worker, job_factory, owner_filter
+):
+    worker, _ = claim_worker
+    start = datetime(2026, 11, 10, tzinfo=UTC)
+    with Session(database) as session:
+        owner = User(
+            username="other-owner", email="other@example.com",
+            full_name="Other", hashed_password="unused",
+        )
+        session.add(owner)
+        session.flush()
+        jobs = []
+        # Include both creation boundaries, a hidden match, a granted match,
+        # another type and a job without LOST attempts.
+        for policy, hours, job_type, lost in [
+            (PermissionPolicy.ALL, -1, "example", True),
+            (PermissionPolicy.ALL, 0, "example", True),
+            (PermissionPolicy.PERMITTED_USERS, 1, "example", True),
+            (PermissionPolicy.PRIVATE, 2, "example", True),
+            (PermissionPolicy.ALL, 3, "other", True),
+            (PermissionPolicy.ALL, 4, "example", False),
+            (PermissionPolicy.ALL, 5, "example", True),
+        ]:
+            job = job_factory(
+                user_id=owner.id, job_type=job_type,
+                status=JobStatus.SUCCEEDED, permission_policy=policy,
+                created_at=start + timedelta(hours=hours),
+                permitted_users=[session.get(User, user.id)]
+                if policy == PermissionPolicy.PERMITTED_USERS else [],
+                attempts=[
+                    JobAttempt(
+                        worker_id=worker.id, attempt_number=number,
+                        status=AttemptStatus.LOST, params={},
+                    ) for number in (1, 2)
+                ] if lost else [],
+            )
+            session.add(job)
+            jobs.append(job)
+        # A visible job owned by the caller must be excluded by the owner filter.
+        session.add(job_factory(created_at=start))
+        session.commit()
+        owner_id = owner.id
+        expected = [jobs[2].id, jobs[1].id]
+        no_lost_id = jobs[5].id
+
+    filters = {
+        owner_filter: owner_id if owner_filter == "owner_id" else "other-owner",
+        "job_type": "example", "attempt_status": "LOST",
+        # An offset timezone must represent the same instant as the UTC boundary.
+        "created_from": "2026-11-10T02:00:00+02:00",
+        "created_before": (start + timedelta(hours=5)).isoformat(),
+    }
+    response = client.get("/jobs", headers=user_headers, params=filters)
+    assert response.status_code == 200
+    assert [job["id"] for job in response.json()] == expected
+    assert all(job["status"] == "SUCCEEDED" for job in response.json())
+    assert all(job["owner_username"] == "other-owner" for job in response.json())
+    response = client.get(
+        "/jobs", headers=user_headers, params={**filters, "limit": 1, "offset": 1}
+    )
+    assert [job["id"] for job in response.json()] == expected[1:]
+    response = client.get(
+        "/jobs", headers=user_headers, params={**filters, "status": "FAILED"}
+    )
+    assert response.json() == []
+    del filters["attempt_status"]
+    response = client.get("/jobs", headers=user_headers, params=filters)
+    assert [job["id"] for job in response.json()] == [no_lost_id, *expected]
+    for username in ("missing-owner", "other", "other%", "OTHER-OWNER"):
+        response = client.get(
+            "/jobs", headers=user_headers,
+            params={**filters, "owner_username": username},
+        )
+        assert response.status_code == 200
+        assert response.json() == []
+    details = client.get(f"/jobs/{expected[0]}", headers=user_headers)
+    assert details.json()["owner_username"] == "other-owner"
+
+
+@pytest.mark.parametrize("path", ["/jobs", "/workers"])
+@pytest.mark.parametrize("params", [
+    {"created_from": "invalid"},
+    {"created_before": "2026-11-10T10:00:00"},
+    {"created_from": "2026-11-11T00:00:00Z", "created_before": "2026-11-10T00:00:00Z"},
+    {"created_from": "2026-11-10T00:00:00Z", "created_before": "2026-11-10T00:00:00Z"},
+    {"owner_username": ""},
+    {"owner_username": "x" * 17},
+])
+def test_list_filters_reject_invalid_values(
+    client, user_headers, path, params
+):
+    response = client.get(path, headers=user_headers, params=params)
+    assert response.status_code == 422
+
+
+def test_list_jobs_rejects_invalid_attempt_status(client, user_headers):
+    response = client.get(
+        "/jobs", headers=user_headers, params={"attempt_status": "UNKNOWN"}
+    )
+    assert response.status_code == 422
 
 
 def test_job_attempt_history_orders_and_paginates(
@@ -248,6 +353,7 @@ def test_list_jobs_returns_summaries_without_loading_payloads_or_attempts(
         assert set(summary) == {
             "id",
             "user_id",
+            "owner_username",
             "job_type",
             "status",
             "created_at",

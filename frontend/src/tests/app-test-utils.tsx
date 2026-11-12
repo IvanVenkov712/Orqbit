@@ -6,11 +6,11 @@ export const user = { id: 7, username: 'demo-user', email: 'demo@example.com', f
 export const fetchMock = vi.fn<typeof fetch>()
 export const storageKey = 'orqbit.access_token'
 export const worker = {
-  id: 17, user_id: user.id, name: 'numbers-worker', active: true,
+  id: 17, user_id: user.id, owner_username: user.username, name: 'numbers-worker', active: true,
   supported_types: ['add_numbers', 'sum'], permission_policy: 'PRIVATE', permitted_user_ids: [],
 }
 export const job = {
-  id: 42, user_id: user.id, job_type: 'add_numbers', status: 'SUCCEEDED',
+  id: 42, user_id: user.id, owner_username: user.username, job_type: 'add_numbers', status: 'SUCCEEDED',
   params: { numbers: [2, 3, 5] }, result: { sum: 10 }, error: null,
   created_at: '2026-11-10T08:00:00Z', updated_at: '2026-11-10T09:30:00Z',
 }

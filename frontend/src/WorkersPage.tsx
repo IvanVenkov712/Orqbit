@@ -10,6 +10,7 @@ type Worker = {
   id: number
   name: string
   user_id: number
+  owner_username: string
   active: boolean
   supported_types: string[]
   permission_policy: 'PRIVATE' | 'PERMITTED_USERS' | 'ALL'
@@ -24,16 +25,24 @@ export function WorkersPage() {
   const { user, request } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const jobType = searchParams.get('job_type') ?? ''
+  const ownerUsername = searchParams.get('owner_username') ?? ''
+  const active = ['true', 'false'].includes(searchParams.get('active') ?? '') ? searchParams.get('active')! : ''
+  const createdFrom = searchParams.get('created_from') ?? ''
+  const createdBefore = searchParams.get('created_before') ?? ''
   const rawOffset = searchParams.get('offset') ?? '0'
   const offset = /^\d+$/.test(rawOffset) && Number.isSafeInteger(Number(rawOffset)) ? Number(rawOffset) : 0
   const workers = useQuery({
-    queryKey: ['workers', user?.id, jobType, offset],
+    queryKey: ['workers', user?.id, jobType, ownerUsername, active, createdFrom, createdBefore, offset],
     enabled: !!user,
     queryFn: async ({ signal }) => {
-      const query = new URLSearchParams({ owner_id: String(user!.id), limit: String(pageSize), offset: String(offset) })
+      const query = new URLSearchParams({ limit: String(pageSize), offset: String(offset) })
+      if (ownerUsername) query.set('owner_username', ownerUsername)
       if (jobType) query.set('job_type', jobType)
-      const page = await request<Worker[]>(`/workers?${query}`, { signal })
-      return page.filter((worker) => worker.user_id === user!.id)
+      if (active) query.set('active', active)
+      for (const [key, value] of [['created_from', createdFrom], ['created_before', createdBefore]]) {
+        if (value) query.set(key, Number.isNaN(Date.parse(value)) ? value : new Date(value).toISOString())
+      }
+      return request<Worker[]>(`/workers?${query}`, { signal })
     },
   })
 
@@ -46,10 +55,13 @@ export function WorkersPage() {
 
   function filter(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const value = String(new FormData(event.currentTarget).get('job_type') ?? '')
+    const form = new FormData(event.currentTarget)
     const next = new URLSearchParams(searchParams)
-    if (value) next.set('job_type', value)
-    else next.delete('job_type')
+    for (const key of ['owner_username', 'job_type', 'active', 'created_from', 'created_before']) {
+      const value = String(form.get(key) ?? '')
+      if (value) next.set(key, value)
+      else next.delete(key)
+    }
     next.delete('offset')
     setSearchParams(next)
   }
@@ -57,28 +69,55 @@ export function WorkersPage() {
   return <>
     <div className={styles.pageHeading}>
       <h1>Workers</h1>
-      <p>Register and inspect your independent workers.</p>
+      <p>Register workers and browse workers you can access across owners.</p>
       <Link className={styles.primaryLink} to="/workers/new">Register a worker</Link>
     </div>
-    <section className={styles.placeholder} aria-label="Your workers">
-      <form onSubmit={filter} aria-label="Filter workers">
-        <div className={styles.authFields}>
-          <label htmlFor="worker-type-filter">Supported job type</label>
-          <input key={jobType} id="worker-type-filter" name="job_type" defaultValue={jobType} maxLength={100} aria-describedby="worker-filter-help" />
-          <small id="worker-filter-help">Match an exact supported type, or leave blank to show all your workers.</small>
+    <section className={styles.placeholder} aria-label="Accessible workers">
+      <form key={`${ownerUsername}|${jobType}|${active}|${createdFrom}|${createdBefore}`} onSubmit={filter} aria-label="Filter workers">
+        <div className={`${styles.authFields} ${styles.filters}`}>
+          <div>
+            <label htmlFor="worker-owner-filter">Owner username</label>
+            <input id="worker-owner-filter" name="owner_username" maxLength={16} defaultValue={ownerUsername} placeholder="All accessible owners" aria-describedby="worker-owner-help" />
+            <small id="worker-owner-help">Exact username. Blank includes all accessible owners.</small>
+          </div>
+          <div>
+            <label htmlFor="worker-type-filter">Supported job type</label>
+            <input id="worker-type-filter" name="job_type" defaultValue={jobType} maxLength={100} aria-describedby="worker-filter-help" />
+            <small id="worker-filter-help">Match an exact supported type, or leave blank for all types.</small>
+          </div>
+          <div>
+            <label htmlFor="worker-active-filter">Credential/registration status</label>
+            <select id="worker-active-filter" name="active" defaultValue={active} aria-describedby="worker-credential-help">
+              <option value="">All statuses</option>
+              <option value="true">Active</option>
+              <option value="false">Inactive</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="worker-created-from">Created from</label>
+            <input id="worker-created-from" name="created_from" type="datetime-local" step="1" defaultValue={createdFrom} aria-describedby="worker-created-help" />
+          </div>
+          <div>
+            <label htmlFor="worker-created-before">Created before</label>
+            <input id="worker-created-before" name="created_before" type="datetime-local" step="1" defaultValue={createdBefore} aria-describedby="worker-created-help" />
+          </div>
         </div>
-        <button type="submit">Apply filter</button>
+        <p id="worker-created-help">Creation times use your local time zone. The upper bound is exclusive.</p>
+        <div className={styles.actions}>
+          <button type="submit">Apply filter</button>
+          <Link to="/workers">Clear filters</Link>
+        </div>
       </form>
-      <p className={styles.actions}>{credentialHelp}</p>
+      <p className={styles.actions} id="worker-credential-help">{credentialHelp}</p>
       {workers.isPending ? <p role="status">Loading workers…</p> : workers.isError ? <>
         <p role="alert">{workers.error instanceof ApiError ? workers.error.message : 'Unable to load workers.'}</p>
         <button type="button" onClick={() => { void workers.refetch() }}>Try again</button>
-      </> : workers.data.length === 0 ? <p>{offset ? 'No more workers on this page.' : jobType ? 'None of your workers support this job type.' : 'You have no registered workers yet.'}</p> : <div className={styles.tableContainer}>
+      </> : workers.data.length === 0 ? <p>{offset ? 'No more workers on this page.' : 'No accessible workers match these filters.'}</p> : <div className={styles.tableContainer}>
         <table className={styles.jobsTable} aria-label="Registered workers">
           <thead><tr><th scope="col">Name</th><th scope="col">Owner</th><th scope="col">Supported types</th><th scope="col">Credential/registration status</th><th scope="col">Visibility</th></tr></thead>
           <tbody>{workers.data.map((worker) => <tr className={styles.jobRow} key={worker.id}>
             <td><Link className={styles.jobLink} to={`/workers/${worker.id}`}>{worker.name}</Link></td>
-            <td>{user?.username}</td>
+            <td>{worker.owner_username}{worker.user_id === user?.id ? ' (you)' : ''}</td>
             <td>{worker.supported_types.join(', ')}</td>
             <td>{worker.active ? 'Active' : 'Inactive'}</td>
             <td>{visibilityLabels[worker.permission_policy]}</td>
@@ -100,11 +139,7 @@ export function WorkerDetailsPage() {
   const details = useQuery({
     queryKey: ['worker-details', user?.id, workerId],
     enabled: validId && !!user,
-    queryFn: async ({ signal }) => {
-      const worker = await request<Worker>(`/workers/${workerId}`, { signal })
-      if (worker.user_id !== user!.id) throw new ApiError('Worker unavailable', 404)
-      return worker
-    },
+    queryFn: ({ signal }) => request<Worker>(`/workers/${workerId}`, { signal }),
   })
   const worker = details.data
   const unavailable = !validId || (details.error instanceof ApiError && [403, 404].includes(details.error.status ?? 0))
@@ -116,7 +151,7 @@ export function WorkerDetailsPage() {
     </div>
     {unavailable ? <section className={styles.placeholder}>
       <h2>Worker unavailable</h2>
-      <p>This worker could not be found or is not one of your workers. Check the link or sign in with the account that registered it.</p>
+      <p>This worker could not be found or you do not have permission to view it.</p>
     </section> : details.isError ? <section className={styles.placeholder}>
       <p role="alert">{details.error instanceof ApiError ? details.error.message : 'Unable to load this worker.'}</p>
       <button type="button" onClick={() => { void details.refetch() }}>Try again</button>
@@ -124,7 +159,7 @@ export function WorkerDetailsPage() {
       <h2>{worker.name}</h2>
       <dl className={styles.metadata}>
         <div><dt>Worker ID</dt><dd>#{worker.id}</dd></div>
-        <div><dt>Owner</dt><dd>{user?.username} (you)</dd></div>
+        <div><dt>Owner</dt><dd>{worker.owner_username}{worker.user_id === user?.id ? ' (you)' : ''}</dd></div>
         <div><dt>Credential/registration status</dt><dd>{worker.active ? 'Active' : 'Inactive'}</dd></div>
         <div><dt>Visibility</dt><dd>{visibilityLabels[worker.permission_policy]}</dd></div>
         {worker.permission_policy === 'PERMITTED_USERS' && <div><dt>Permitted user IDs</dt><dd>{worker.permitted_user_ids.join(', ') || 'None'}</dd></div>}

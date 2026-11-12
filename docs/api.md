@@ -29,7 +29,7 @@ Both discovery endpoints return only `id`, `username`, and `full_name`. They omi
 | Method | Route | Request | Response |
 | --- | --- | --- | --- |
 | POST | `/jobs/` | JSON: `job_type`, `params`, `permission_policy`; optional permitted-ID lists | Created job |
-| GET | `/jobs` | Optional `owner_id`, `status`, `job_type`, `limit`, `offset`, `sort` query parameters | Accessible job summaries, newest ID first by default |
+| GET | `/jobs` | Optional `owner_username`, `owner_id`, `status`, `job_type`, `attempt_status`, `created_from`, `created_before`, `limit`, `offset`, `sort` query parameters | Accessible job summaries, newest ID first by default |
 | GET | `/jobs/{job_id}` | Job ID | Accessible job, or 404 |
 | GET | `/jobs/{job_id}/attempts` | Job ID; optional `limit`, `offset` | Execution attempts, highest attempt number first |
 
@@ -41,13 +41,20 @@ Migration `4610066358ca` adds the required columns and uniqueness on `(user_id, 
 
 `GET /jobs` defaults to `limit=50`, `offset=0`; limit must be 1?100 and offset nonnegative. Filters are combined with permission checks. The optional `sort=status_updated` orders by lifecycle status (`PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`), then descending update time and ID; other sort values return 422.
 
-The list returns a JSON array of `JobSummaryRead` objects containing only `id`, `user_id`, `job_type`, `status`, `created_at`, and `updated_at`. The database query fetches only these columns and does not load attempts. No matches or an offset beyond the results returns 200 with `[]`.
+The list returns a JSON array of `JobSummaryRead` objects containing only `id`, `user_id`, `owner_username`, `job_type`, `status`, `created_at`, and `updated_at`. The database query fetches these job columns and the owner's username in one query and does not load attempts. No matches or an offset beyond the results returns 200 with `[]`.
+
+Omitting owner filters lists jobs from all owners the caller can access. `owner_username` matches the exact, case-sensitive username (1–16 characters); an unknown username returns an empty list. The existing `owner_id` remains supported for API compatibility; if both are supplied, both must match. Neither filter grants access to hidden records. `attempt_status` matches jobs with **any historical attempt** in that state (`RUNNING`, `SUCCEEDED`, `FAILED`, or `LOST`) without duplicating jobs with several matching attempts. It combines with the job's current `status`, when supplied. `LOST` remains an attempt state, not a job state: a job with a lost attempt may now be pending, running, succeeded, or failed.
+
+`created_from` is inclusive and `created_before` is exclusive, both filtering the job's creation time. Supply ISO 8601 timestamps with an explicit timezone, for example `2026-11-10T08:00:00Z`. Missing timezones, invalid timestamps, and ranges with `created_from >= created_before` return 422. All filters and permissions apply before sorting and pagination.
+
+The frontend browses all accessible owners by default and offers an optional **Owner username** filter, exact job-type matching, local creation-time inputs, all/current-status views and a **Lost attempts** view (`attempt_status=LOST`). Filter values and pagination persist in the URL; changing filters resets the offset. Failed rows link to stored job/attempt error details; lost-attempt rows link to attempt history. Lists and detail pages display the owner's username. Detail and history pages use backend access decisions rather than rejecting records merely because their owner differs from the viewer.
 
 **List response compatibility:** list items no longer include `params`, `result`, `error`, or `attempt_ids`. Clients needing those fields must use `GET /jobs/{job_id}`. Job submission and detail responses retain their full `JobRead` shape:
 
 | Field | Meaning |
 | --- | --- |
 | `id`, `user_id` | Integer job and creator IDs |
+| `owner_username` | Creator's username |
 | `job_type`, `params` | Submitted type and JSON-object input |
 | `status` | `PENDING`, `RUNNING`, `SUCCEEDED`, or `FAILED` |
 | `result`, `error` | JSON objects or null |
@@ -115,14 +122,16 @@ The [quickstart](quickstart.md) provides executable registration/login and job-s
 | Method | Route | Request | Response |
 | --- | --- | --- | --- |
 | POST | `/workers` | JSON: `name`, `supported_types`, `permission_policy`; optional `permitted_user_ids` | Worker metadata plus `secret_api_key` |
-| GET | `/workers` | Optional `owner_id`, `job_type`, `limit`, `offset` | Accessible workers, newest ID first |
+| GET | `/workers` | Optional `owner_username`, `owner_id`, `job_type`, `active`, `created_from`, `created_before`, `limit`, `offset` | Accessible workers, newest ID first |
 | GET | `/workers/{worker_id}` | Worker ID | Accessible worker, or 404 |
 
 These routes require a user token. `supported_types` is a nonempty set of strings; each entry follows the job-type rules above. Duplicate types are deduplicated. Permitted-user IDs must exist. Pagination defaults and bounds match job lists; `job_type` filters workers supporting that type.
 
+Omit owner filters for all accessible owners or supply `owner_username` to match an exact, case-sensitive username. The same username rules and compatibility with `owner_id` apply as for jobs. `active=true` or `active=false` filters credential/registration status; omitting it includes both. This does not indicate whether a worker process is online. Creation-time filters use the same inclusive `created_from`, exclusive `created_before`, timezone and range-validation rules as jobs, applied to the worker's creation time. Filters and visibility checks apply before pagination. The frontend exposes these filters in the URL and allows viewing accessible workers owned by other users; worker states do not include `LOST`.
+
 Worker visibility policies are `PRIVATE` (owner only), `PERMITTED_USERS` (owner plus listed users), and `ALL` (all authenticated users). Visibility lets users inspect metadata; it does not reveal the API key or let them claim as that worker. Claims use the worker owner's job permissions plus explicit worker grants.
 
-Worker metadata contains `id`, `name`, `active`, `user_id`, `permission_policy`, `supported_types`, and `permitted_user_ids`. The raw API key is returned only by creation; store it for the independent worker. Reads/lists omit it, and PostgreSQL stores its SHA-256 hash. Worker names are globally unique.
+Worker metadata contains `id`, `name`, `active`, `user_id`, `owner_username`, `permission_policy`, `supported_types`, and `permitted_user_ids`. The raw API key is returned only by creation; store it for the independent worker. Reads/lists omit it, and PostgreSQL stores its SHA-256 hash. Worker names are globally unique.
 
 ### Job-type suggestions
 
