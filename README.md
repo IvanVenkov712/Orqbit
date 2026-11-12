@@ -74,7 +74,7 @@ The next areas of development build on the existing submission, claiming, and re
 - **Operational visibility** through metrics, structured logs, and tools for diagnosing stalled or failed work.
 - **Additional job controls and integrations**, such as cancellation, scheduling, priorities, and completion webhooks, as their requirements take shape.
 
-These are planned capabilities. The [roadmap](docs/roadmap.md) describes the proposed stages; [implementation notes](docs/status.md) document guarantees, limitations, and recorded verification.
+Follow the [backend roadmap](docs/roadmap.md) and [frontend roadmap](frontend/docs/roadmap.md) for remaining tasks, or use the [remaining-work index](docs/status.md).
 
 ## Try Orqbit
 
@@ -97,8 +97,8 @@ The backend uses **Python, FastAPI, PostgreSQL, SQLAlchemy, Pydantic, and Alembi
 | [API reference](docs/api.md) | Authentication, permissions, requests, responses, and errors |
 | [Development](docs/development.md) | Local setup, repository layout, coordination details, migrations, and containers |
 | [Testing](docs/testing.md) | PostgreSQL integration tests and container verification |
-| [Implementation notes](docs/status.md) | Behavior, limitations, and verification records |
-| [Roadmap](docs/roadmap.md) | Development stages and planned capabilities |
+| [Remaining work](docs/status.md) | Backend/frontend tasks, outstanding requirements, and open decisions |
+| [Backend roadmap](docs/roadmap.md) | Remaining implementation and operational work |
 | [Architecture](docs/architecture.md) and [requirements](docs/requirements.md) | Proposed reliability model and design criteria |
 
 ## License

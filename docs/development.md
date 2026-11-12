@@ -74,7 +74,7 @@ If using an existing Windows virtual environment, the equivalent interpreter inv
 
 `--app-dir src` is necessary for the current top-level imports. The reload flag is for local development. Run from `backend/` so settings find `backend/.env`. Configure your IDE to use `backend/.venv` as its interpreter environment and `backend/` as the API working directory. PostgreSQL stores database state; importing `main` does not create or alter tables.
 
-The API normally exposes interactive docs at `http://127.0.0.1:8000/docs` and its schema at `/openapi.json`. Register/log in a user for job and worker-management routes. Workers claim and report with their own API keys and report by attempt ID. See [API](api.md) for examples and [status](status.md) for verification limits.
+The API normally exposes interactive docs at `http://127.0.0.1:8000/docs` and its schema at `/openapi.json`. Register/log in a user for job and worker-management routes. Workers claim and report with their own API keys and report by attempt ID. See [API](api.md) for examples and [remaining work](status.md) for planned extensions.
 
 Keep the API terminal running. In a second PowerShell terminal, check database and schema readiness:
 
@@ -160,4 +160,4 @@ The PostgreSQL health check and migration dependency control initial startup; th
 
 ## Validation strategy
 
-See the [testing guide](testing.md#validation-strategy) for the validation strategy and verification record.
+See the [testing guide](testing.md#validation-strategy) for further validation work.

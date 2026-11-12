@@ -1,8 +1,8 @@
 # Orqbit frontend
 
-The frontend is a React, TypeScript, and Vite application intended to become a small dashboard for submitting jobs, inspecting outcomes, and registering independent workers.
+React, TypeScript, and Vite interface for submitting jobs, inspecting outcomes, and registering independent workers.
 
-The current UI is still the Vite starter. Routing, authentication, job and worker screens, and the recommended visual design are planned.
+See the [frontend roadmap](docs/roadmap.md) for remaining interface work.
 
 ## Guides
 
@@ -24,4 +24,4 @@ npm run dev
 
 Open the URL printed by Vite. Browser requests to `/api` are forwarded to the backend with that prefix removed. The [development guide](docs/development.md#running-the-frontend) also describes the existing Docker Compose arrangement.
 
-From `frontend/`, run `npm run lint` for Oxlint and `npm run build` for TypeScript checking and the production build. No frontend test runner is configured yet.
+From `frontend/`, run `npm test` for Vitest, `npm run lint` for Oxlint, and `npm run build` for TypeScript checking and the production build.

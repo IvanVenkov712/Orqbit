@@ -1,6 +1,6 @@
 # Frontend development guide
 
-This guide records the recommended organization and visual design for Orqbit's frontend. The current application is still the Vite starter; feature directories, application screens, routing, authentication, and data caching described below are proposed. Follow the [roadmap](roadmap.md) in small increments.
+Use this guide for setup and frontend working conventions. Track remaining interface tasks in the [roadmap](roadmap.md).
 
 ## Running the frontend
 
@@ -18,7 +18,7 @@ npm ci
 npm run dev
 ```
 
-**3. Open the interface.** Use Vite's printed Local URL, usually `http://localhost:5173`, and choose Create an account. Register, then sign in with your username and password. Existing accounts can sign in directly. Jobs and Workers currently show labeled placeholders; their functional screens arrive in later roadmap steps. Reloading the page preserves login until the token expires or you sign out. An independent worker is unnecessary for viewing the interface or signing in.
+**3. Open the interface.** Use Vite's printed Local URL, usually `http://localhost:5173`, and choose Create an account. Register, then sign in with your username and password. Existing accounts can sign in directly. Use Jobs to submit and inspect work and Workers to register worker credentials. Run an independent worker to execute submitted jobs. Reloading the page preserves login until the token expires or you sign out.
 
 Keep both terminals running while using the application. Press `Ctrl+C` in each to stop its development server; your PostgreSQL database retains accounts and jobs.
 
@@ -29,65 +29,54 @@ Keep both terminals running while using the application. Press `Ctrl+C` in each 
 For the existing container arrangement, first configure `.env.compose` using the [quickstart](../../docs/quickstart.md), then run from the repository root:
 
 ```powershell
-docker compose --env-file .env.compose up --build --wait --wait-timeout 120 frontend
+docker compose --env-file .env.compose up --build --wait --wait-timeout 120 frontend recovery
 ```
 
-Open `http://localhost:8080`. Nginx serves the built application, forwards `/api/` to `api:8000`, and falls back to `index.html` for client routes. Docker Compose already includes this service; its presence does not mean application features are implemented. Use Vite for frontend hot reload.
+Open `http://localhost:8080`. Nginx serves the built application, forwards `/api/` to `api:8000`, and falls back to `index.html` for client routes. Use Vite for frontend hot reload.
 
 ## Architecture and source organization
 
 Keep `frontend/` alongside `backend/`. The browser communicates exclusively through Orqbit's public HTTP API. FastAPI owns validation, authorization, and job lifecycle transitions; independent workers claim and execute jobs outside the browser and API process.
 
-Retain React, TypeScript, and Vite. Add React Router with navigation, and TanStack Query when server-data screens arrive. Use local React state for forms and temporary UI state, and a small context for authentication. Server records belong in the query cache; filters and pagination belong in the URL. This scope does not need a separate global state library or server-rendering framework.
+Use React Router for navigation, TanStack Query for server records, local React state for forms and temporary UI state, and the authentication context for sessions. Filters and pagination belong in the URL. This scope does not need a separate global state library or server-rendering framework.
 
-Grow toward this structure as features are implemented:
+Source locations:
 
 ```text
 src/
   main.tsx                  React entry point
-  App.tsx                   Providers, routing, application composition
+  App.tsx                   Providers, routing, authentication and submission forms
+  auth.tsx                  Authentication context and session restoration
+  JobsPage.tsx              Job browsing
+  JobDetailsPage.tsx        Job details and attempt history
+  WorkersPage.tsx           Worker browsing, registration, and details
+  ParameterEditor.tsx       Nested JSON parameter editing
   index.css                 Global styles and design variables
+  App.module.css            Shared application styles
   api/
     client.ts               Shared fetch, authentication, and error handling
-  components/
-    AppLayout.tsx           Navigation, user menu, and page content
-    StatusBadge.tsx          Status text and semantic color
-    JsonViewer.tsx           Formatted JSON and copy action
-  features/
-    auth/
-      LoginPage.tsx
-      RegisterPage.tsx
-      api.ts
-    jobs/
-      JobsPage.tsx
-      SubmitJobPage.tsx
-      JobDetailsPage.tsx
-      api.ts
-      types.ts
-    workers/
-      WorkersPage.tsx
-      WorkerDetailsPage.tsx
-      api.ts
-      types.ts
+  tests/                    Interface behavior tests and shared test utilities
 ```
 
-Keep feature-specific components, styles, and tests beside their feature. Move a component into `components/` when multiple features need it. Keep API calls and contracts in each feature's `api.ts` and `types.ts`; do not import backend Python models. Add an authentication context or query hooks only when their behavior needs a separate file. Avoid empty directories, barrel exports, and generic service/repository layers.
+Follow these files and patterns when adding behavior. Extract shared components or feature directories only when a concrete change benefits from them; do not create placeholder layers. Do not import backend Python models into browser code.
 
 ## Screens and navigation
 
-Use a simple top navigation bar with Jobs, Workers, and the current-user menu. Jobs is the default authenticated destination. Suggested client routes below are frontend routes, distinct from backend endpoints.
+Use a simple top navigation bar with Jobs, Workers, and the current-user menu. Jobs is the default authenticated destination. Client routes below are distinct from backend endpoints.
 
 | Client route | Screen and behavior |
 | --- | --- |
 | `/login` | Login form and registration link |
 | `/register` | Account registration, followed by login |
-| `/jobs` | Accessible jobs, status/type filters, pagination, Submit job action |
+| `/jobs` | Your jobs, status views, pagination, Submit job action |
 | `/jobs/new` | Type, JSON parameters, and access policy |
 | `/jobs/:jobId` | Status and identifiers, parameters, result/error, attempt history |
-| `/workers` | Accessible workers, type filter, pagination, registration form |
+| `/jobs/:jobId/attempts` | Dedicated attempt-history view |
+| `/workers` | Your workers, type filter, pagination, registration action |
+| `/workers/new` | Worker registration and one-time API-key display |
 | `/workers/:workerId` | Worker metadata, supported types, and visibility policy |
 
-Give pages one clear primary action. Use real links for navigation and buttons for actions. Put status and identifying information first on job details, followed by JSON panels and attempt history. Worker registration can begin as an inline form on the Workers screen.
+Give pages one clear primary action. Use real links for navigation and buttons for actions. Put status and identifying information first on job details, followed by JSON panels and attempt history. Keep worker registration and its one-time API-key display on the registration route.
 
 Preserve filters and pagination through query parameters, validate them before API requests, and reset the offset when filters change. Lists and attempts return arrays with `limit`/`offset`, not total counts. Use Previous/Next controls; a full page may require one more request to discover the end. Do not infer global totals from a page of accessible records.
 
@@ -110,7 +99,7 @@ Use `Authorization: Bearer <access_token>` for user-protected requests. Worker `
 
 The shared client should support both form and JSON requests, check HTTP status, and translate string `detail` errors and FastAPI field-validation arrays into useful messages. Show network failures separately from invalid input. Missing and inaccessible records both return 404; do not reveal or infer which case applies. Current creation routes return 200.
 
-Persist only the access token in local storage, keeping passwords and current-user details out of browser persistence. Page reloads preserve login: validate the saved token's expiry, then load `/users/me/` before opening protected screens. Remove the saved token on expiry, logout, or authentication rejection; preserve it on network/server failures and offer a restoration retry. There is no token-refresh endpoint or server-side logout operation. On session expiry, cancel user-specific requests and clear cached records when caching is introduced. Keep caches isolated between users. Registration returns user metadata, so it does not itself establish a logged-in session.
+Persist only the access token in local storage, keeping passwords and current-user details out of browser persistence. Page reloads preserve login: validate the saved token's expiry, then load `/users/me/` before opening protected screens. Remove the saved token on expiry, logout, or authentication rejection; preserve it on network/server failures and offer a restoration retry. There is no token-refresh endpoint or server-side logout operation. On session expiry, cancel user-specific requests and clear cached records. Keep caches isolated between users. Registration returns user metadata, so it does not itself establish a logged-in session.
 
 ### Submission and credentials
 
@@ -118,7 +107,7 @@ Validate that parameters parse as a JSON object; arrays, primitives, and null ar
 
 Worker registration requires a name, nonempty supported types, and visibility policy. Show the returned `secret_api_key` only in the immediate creation result, with a copy action and instructions to save it. Avoid storing it in browser persistence, URLs, logs, or the long-lived query cache. Later reads cannot retrieve it, and the current API cannot rotate it.
 
-When adding advanced policies, show only relevant user/worker ID inputs and explain their effect. A worker claim grant does not automatically grant its owner user-facing job access. Worker visibility and job permissions are distinct. There is no general user-directory endpoint; use explicit IDs rather than assuming a searchable picker. Consult the API reference for policy values and validation rules.
+Show only the user/worker ID inputs relevant to the selected policy and explain their effect. A worker claim grant does not automatically grant its owner user-facing job access. Worker visibility and job permissions are distinct. Use the API's user-discovery endpoints if adding searchable grant pickers. Consult the API reference for policy values and validation rules.
 
 ### Server state and polling
 
@@ -154,7 +143,7 @@ Use a system sans-serif stack for normal text and a system monospace stack for j
 - Forms use labels above controls, concise help text, inline validation errors, and a visible submitting state. Start JSON entry with a normal textarea; a code editor is not required.
 - Primary buttons use solid teal with contrasting text. Secondary actions use outlined or plain treatments. Keep destructive styling reserved for actual destructive operations when supported.
 - JSON panels use a pale background, preserved indentation, monospace text, scrolling for large content, and a copy action with feedback. Render JSON as text rather than injecting HTML.
-- Status badges include text: slate for `PENDING`, blue for `RUNNING`, green for `SUCCEEDED`, and red for `FAILED`. An attempt may also expose `LOST`; keep it visibly distinct and labeled without implying automated crash detection exists.
+- Status badges include text: slate for `PENDING`, blue for `RUNNING`, green for `SUCCEEDED`, and red for `FAILED`. Label `LOST` as an expired attempt lease, without treating it as proof that the worker process stopped.
 - Use visible keyboard focus, associated form labels, semantic tables, and accessible copy/error feedback. Color must be accompanied by text or another cue.
 - Keep hover transitions brief and honor reduced-motion preferences. Background polling should not flash the page, move focus, or repeatedly announce unchanged content.
 
@@ -162,10 +151,10 @@ Check actual color combinations against WCAG: normal text needs 4.5:1 contrast a
 
 ## Backend limits that affect the interface
 
-- Job reads expose IDs, type, params, status, result/error, and attempt IDs. They currently omit job timestamps, permission policies, and grant lists. Do not invent job durations or permission details.
+- Job reads expose IDs, type, params, status, result/error, attempt IDs, timestamps, retry counters, and `available_at`. They omit permission policies and grant lists. Do not invent job durations or permission details.
 - Attempt history includes worker attribution and creation/update timestamps. `updated_at` is not a dedicated finished timestamp. Display timezone information clearly when formatting timestamps.
-- Worker `active` indicates authentication eligibility, not online status. There are no heartbeats or live process metrics.
-- Jobs may remain running after worker failure because there is no lease recovery. A reported failure is terminal; retries and requeue operations are not implemented.
+- Worker `active` indicates authentication eligibility, not online status. Attempt heartbeats do not provide a separate worker-process liveness signal.
+- Recovery schedules retries for lost attempts while budget remains. A worker-reported failure is terminal. Use [recovery and bounded retries](../../docs/api.md#recovery-and-bounded-retries) when presenting these states.
 - There are no update/delete, cancellation, account-management, token-refresh, or key-rotation endpoints. Add their controls only when backend contracts exist.
 - Client route guards improve navigation; authorization remains enforced by the API.
 
@@ -174,11 +163,12 @@ Check actual color combinations against WCAG: normal text needs 4.5:1 contrast a
 From `frontend/`:
 
 ```powershell
+npm test
 npm run lint
 npm run build
 ```
 
-These scripts run Oxlint and TypeScript/Vite respectively. No frontend formatter or test runner is currently configured. Introduce one small test setup with the first behavior that needs it, then reuse it. Co-locate focused tests with features; prioritize observable behavior such as invalid JSON, authentication errors, submission-key reuse after a lost response, URL filters, one-time secret display, and terminal-state polling. Use controlled responses and timers rather than arbitrary sleeps.
+These scripts run Vitest, Oxlint, and TypeScript/Vite respectively. Reuse the Vitest/Testing Library setup and prioritize observable behavior such as invalid JSON, authentication errors, submission-key reuse after a lost response, URL filters, one-time secret display, and terminal-state polling. Use controlled responses and timers rather than arbitrary sleeps.
 
 Verify the first complete flow against the real backend and independent example worker. Check direct route loading, keyboard use, narrow layouts, empty lists, unavailable records, API failures, and expired credentials. Mocked frontend responses do not establish backend permissions or concurrency guarantees; the existing backend tests cover those concerns.
 
