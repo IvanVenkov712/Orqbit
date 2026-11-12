@@ -1,26 +1,13 @@
-import hashlib
-import secrets
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Security
-from fastapi.security import APIKeyHeader
 from sqlalchemy import select
 from starlette import status
 
 from database import SessionDep
 from models.worker import Worker
+from services.api_key_auth import api_key_scheme, hash_api_key
 
-
-def generate_api_key() -> str:
-    return "oqb_" + secrets.token_urlsafe(32)
-
-def hash_api_key(api_key: str) -> str:
-    return hashlib.sha256(api_key.encode()).hexdigest()
-
-api_key_scheme = APIKeyHeader(
-    name="X-API-Key",
-    auto_error=False,
-)
 
 def get_current_worker(
     api_key: Annotated[str, Security(api_key_scheme)],
