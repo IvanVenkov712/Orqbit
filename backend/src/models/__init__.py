@@ -2,6 +2,7 @@ from .job import Job
 from .job_attempts import JobAttempt
 from .job_permitted_users import PermittedUser
 from .job_permitted_workers import PermittedWorker
+from .producers import Producer
 from .supported_types import SupportedJobType
 from .user import User
 from .worker import Worker

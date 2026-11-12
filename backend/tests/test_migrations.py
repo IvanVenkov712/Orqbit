@@ -1,4 +1,7 @@
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from alembic import command
@@ -12,6 +15,23 @@ from sqlalchemy.orm import Session
 from models.job import Job, JobStatus
 from models.job_attempts import AttemptStatus, JobAttempt
 from models.user import User
+
+
+def test_alembic_metadata_registers_producer_in_fresh_process():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from models.base import Base; "
+            "assert 'producers' in {table.name for table in Base.metadata.sorted_tables}; "
+            "fk = next(iter(Base.metadata.tables['jobs'].c.producer_id.foreign_keys)); "
+            "assert fk.column is Base.metadata.tables['producers'].c.id",
+        ],
+        cwd=Path(__file__).resolve().parents[1] / "src",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_migrated_schema_has_postgresql_types(database, alembic_config):
