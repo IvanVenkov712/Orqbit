@@ -99,6 +99,6 @@ Common causes:
 
 If you need help, share the error message after removing any passwords, tokens, keys, or private job data. Keep your configuration files private.
 
-For installation without Docker, use the [backend local setup](../docs/development.md#running-the-api-locally) and [frontend local setup](../frontend/docs/development.md#without-docker-powershell). For application integrations, continue with the [API reference](../docs/api.md).
+For installation without Docker, use the [backend local setup](../../docs/development.md#running-the-api-locally) and [frontend local setup](../../frontend/docs/development.md#without-docker-powershell). For application integrations, continue with the [API reference](../../docs/api.md).
 
 [Back to the tutorial index](README.md)

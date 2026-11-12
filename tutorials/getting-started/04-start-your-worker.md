@@ -83,11 +83,11 @@ Finish the addition walkthrough first. When you want another example, register a
 
 | Folder under `examples/workers/` | Supported type | What to submit |
 | --- | --- | --- |
-| [`add_numbers`](../examples/workers/add_numbers/README.md) | `add_numbers` | A `numbers` list containing Number items. `[2, 3, 5]` returns `{"sum":10}`. |
-| [`count_primes`](../examples/workers/count_primes/README.md) | `count_primes` | A Number parameter named `limit`, with value `100`. Returns `{"limit":100,"count":25}`. Use a whole number. |
-| [`csv_summary`](../examples/workers/csv_summary/README.md) | `csv_summary` | CSV text and a list of column names; see the short recipe below. |
-| [`delay_with_heartbeat`](../examples/workers/delay_with_heartbeat/README.md) | `delay_with_heartbeat` | No parameters. Waits 150 seconds by default and returns `{"waited_seconds":150}`. Useful for watching Running status. |
-| [`delay`](../examples/workers/delay/README.md) | `delay` | No parameters. Set `EXECUTION_DELAY=5` in its `.env` for a short successful job. Its default 150-second delay deliberately exceeds the default execution window. |
+| [`add_numbers`](../../examples/workers/add_numbers/README.md) | `add_numbers` | A `numbers` list containing Number items. `[2, 3, 5]` returns `{"sum":10}`. |
+| [`count_primes`](../../examples/workers/count_primes/README.md) | `count_primes` | A Number parameter named `limit`, with value `100`. Returns `{"limit":100,"count":25}`. Use a whole number. |
+| [`csv_summary`](../../examples/workers/csv_summary/README.md) | `csv_summary` | CSV text and a list of column names; see the short recipe below. |
+| [`delay_with_heartbeat`](../../examples/workers/delay_with_heartbeat/README.md) | `delay_with_heartbeat` | No parameters. Waits 150 seconds by default and returns `{"waited_seconds":150}`. Useful for watching Running status. |
+| [`delay`](../../examples/workers/delay/README.md) | `delay` | No parameters. Set `EXECUTION_DELAY=5` in its `.env` for a short successful job. Its default 150-second delay deliberately exceeds the default execution window. |
 
 For each example, copy **its own** `.env.example` so any extra settings are included. Do not register an example for types its program does not implement. If you want several examples running at once, give each a separate terminal and key.
 

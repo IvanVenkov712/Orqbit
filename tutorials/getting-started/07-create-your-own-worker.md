@@ -6,6 +6,8 @@
 
 This step involves editing Python. If you just want to use the supplied workers, you can [skip ahead](08-everyday-use-and-troubleshooting.md).
 
+For a complete worker that renews its lease during longer tasks, follow the separate [leases and heartbeats tutorial](../worker-leases-and-heartbeats/README.md).
+
 You will reuse the addition example's connection and configuration files. Your new worker will have its own folder, dependencies, key, and execution logic. No server changes are needed.
 
 ## Prepare a separate folder
@@ -124,7 +126,7 @@ if __name__ == "__main__":
 
 `greet_user` is the part that does your work. The remaining code asks for a job, reports either a result or an input error, and waits when the queue is empty. It uses the **attempt ID** returned by the claim when reporting an outcome.
 
-This example is for quick work that finishes inside the default 120-second execution window, including the time needed to report the result. For longer tasks, start from [`delay_with_heartbeat`](../examples/workers/delay_with_heartbeat/README.md) or [`count_primes`](../examples/workers/count_primes/README.md), which renew that window while working.
+This example is for quick work that finishes inside the default 120-second execution window, including the time needed to report the result. For longer tasks, start from [`delay_with_heartbeat`](../../examples/workers/delay_with_heartbeat/README.md) or [`count_primes`](../../examples/workers/count_primes/README.md), which renew that window while working.
 
 ## Check the greeting before connecting
 
