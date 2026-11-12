@@ -84,6 +84,59 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/health/ready
 
 Expect `status: ready`. If the check fails, inspect the API terminal, PostgreSQL service, database credentials, and migration output. To open the browser interface, continue with the [frontend setup without Docker](../frontend/docs/development.md#without-docker-powershell); it covers Node.js/npm, starting Vite, registration, and login. Stop each development server with `Ctrl+C` in its terminal. PostgreSQL retains accounts and jobs.
 
+## Demo database data
+
+`backend/src/seed.py` populates an already migrated development database using
+`DATABASE_URL` and the other settings from `backend/.env`. From `backend/`:
+
+```powershell
+uv run --locked alembic upgrade head
+$env:ORQBIT_DEMO_PASSWORD = Read-Host "Password for demo accounts"
+uv run --locked python src/seed.py seed
+```
+
+The password must satisfy the registration rules: 6-20 characters, with uppercase
+and lowercase letters, a digit, and one of `@$#%`. Passwords are stored as Argon2
+hashes. All demo accounts use the supplied password:
+
+| Username | Role | Active |
+| --- | --- | --- |
+| `demo_admin` | ADMIN | Yes |
+| `demo_alice` | REGULAR | Yes |
+| `demo_bob` | REGULAR | Yes |
+| `demo_carol` | REGULAR | Yes |
+| `demo_inactive` | REGULAR | No |
+
+Each run creates 6 workers, 40 jobs, and 50 attempts. Workers include private,
+shared, public, inactive, and multiple-capability examples. Their API keys are
+generated, stored only as hashes, and printed once after a successful commit.
+Use a printed key as `API_KEY` in a compatible example worker; `demo_paused`
+is inactive and cannot authenticate. Jobs cover all five permission policies
+and the `add_numbers`, `count_primes`, `delay`, `delay_with_heartbeat`, and
+`csv_summary` types. Every type has eight scenarios: pending, running, succeeded,
+worker-reported failure, pending retry, success after a lost attempt, exhausted
+attempts, and a running attempt with an expired lease. Records have varied ages,
+and attempts retain ordered histories, matching parameters, results, and errors.
+Demo jobs explicitly save attempt limits of 1 or 3 independently of `MAX_ATTEMPTS`.
+
+`seed` adds demo data alongside existing records. It refuses duplicate demo
+usernames; other name/email conflicts also roll back the entire operation.
+The following commands **delete all application data**, including records that
+were not created by this script:
+
+```powershell
+uv run --locked python src/seed.py clear  # Empty the application tables
+uv run --locked python src/seed.py reset  # Clear and recreate the demo dataset
+Remove-Item Env:ORQBIT_DEMO_PASSWORD
+```
+
+`clear` needs no demo password. Each command uses one transaction; a failed
+`reset` restores the previous records. Tables, ID sequences, and Alembic revision
+history are preserved, so IDs keep increasing. Use a disposable development
+database and stop workers and recovery while loading or inspecting a stable
+snapshot: they can claim pending jobs or recover the expired examples normally.
+The script does not create the database, apply migrations, or execute jobs.
+
 ## Job coordination
 
 Clients submit with a required creator-scoped `Idempotency-Key`; matching retries return the existing job, and changed content returns 409. Workers authenticate with `X-API-Key` and claim without a request body; their supported job types are registered on the server. A claim returns an execution attempt, and the worker reports its outcome by that attempt's ID. Clients can read job status, result/error, and attempt IDs, then fetch paginated attempt details from `GET /jobs/{job_id}/attempts`. The [example worker guide](../examples/workers/add_numbers/README.md) walks through this flow.
