@@ -2,7 +2,7 @@
 
 [Tutorial home](README.md) · [Next: Implement heartbeats →](02-implement-heartbeats.md)
 
-We will reuse the example's HTTP client, settings, and polling loop, then write the lease-handling and task code ourselves. Everything will live in `examples/workers/delayed_greeting/`. This directory must be new; do not overwrite an existing worker.
+We will copy the [worker foundation](../../examples/workers/worker_foundation/README.md), then write the lease-handling and task code ourselves. Everything will live in `examples/workers/delayed_greeting/`. This directory must be new; do not overwrite an existing worker.
 
 ## Copy the small foundation
 
@@ -10,7 +10,7 @@ From the **repository root**, in PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Path examples/workers/delayed_greeting
-Copy-Item -Path examples/workers/delay_with_heartbeat/api.py, examples/workers/delay_with_heartbeat/settings.py, examples/workers/delay_with_heartbeat/worker.py, examples/workers/delay_with_heartbeat/pyproject.toml, examples/workers/delay_with_heartbeat/.env.example -Destination examples/workers/delayed_greeting
+Copy-Item -Path examples/workers/worker_foundation/api.py, examples/workers/worker_foundation/settings.py, examples/workers/worker_foundation/worker.py, examples/workers/worker_foundation/pyproject.toml, examples/workers/worker_foundation/.env.example -Destination examples/workers/delayed_greeting
 cd examples/workers/delayed_greeting
 ```
 
@@ -18,7 +18,7 @@ On macOS or Linux:
 
 ```sh
 mkdir examples/workers/delayed_greeting
-cp examples/workers/delay_with_heartbeat/api.py examples/workers/delay_with_heartbeat/settings.py examples/workers/delay_with_heartbeat/worker.py examples/workers/delay_with_heartbeat/pyproject.toml examples/workers/delay_with_heartbeat/.env.example examples/workers/delayed_greeting/
+cp examples/workers/worker_foundation/api.py examples/workers/worker_foundation/settings.py examples/workers/worker_foundation/worker.py examples/workers/worker_foundation/pyproject.toml examples/workers/worker_foundation/.env.example examples/workers/delayed_greeting/
 cd examples/workers/delayed_greeting
 ```
 
@@ -28,7 +28,7 @@ In your copied `pyproject.toml`, change the project name to:
 name = "orqbit-delayed-greeting-worker"
 ```
 
-In your copied `worker.py`, replace `delay_with_heartbeat` with `delayed_greeting` in its introductory description and startup log. Keep the rest of the file unchanged. The job-type check itself will be in `execution.py` in step 3.
+The copied `worker.py` already has a generic startup message. Keep it unchanged. The job-type check will be in `execution.py` in step 3.
 
 Install the worker's dependencies:
 
@@ -50,7 +50,13 @@ We will add `heartbeat.py` and `execution.py` next. Until then, starting `worker
 
 ## Know your settings
 
-Your copied `.env.example` already contains:
+Your copied `settings.py` contains connection, polling, and heartbeat settings. Our demonstration also needs a task duration. Add this field inside its `Settings` class:
+
+```python
+    execution_delay: float = Field(default=150, ge=0, allow_inf_nan=False)
+```
+
+`Field` is already imported. Add `EXECUTION_DELAY=150` to your copied `.env.example`, so it contains:
 
 ```dotenv
 API_KEY=replace_with_worker_secret_api_key
