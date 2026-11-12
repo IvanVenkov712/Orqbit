@@ -27,6 +27,14 @@ class WorkerDeletionConflict(Exception):
     pass
 
 
+def get_owned_worker(worker_id: int, session: Session, user: User) -> Worker | None:
+    return session.scalar(
+        select(Worker)
+        .where(Worker.id == worker_id, Worker.user_id == user.id)
+        .with_for_update()
+    )
+
+
 def update_worker_supported_types(
     session: Session, worker: Worker, payload: WorkerSupportedTypesUpdate
 ) -> WorkerRead:

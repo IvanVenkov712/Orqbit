@@ -22,6 +22,7 @@ from services.worker import (
     WorkerCreationConflict,
     WorkerDeletionConflict,
     accessible_workers_query,
+    get_owned_worker,
     reissue_worker_api_key,
     update_worker_supported_types,
     worker_accessible,
@@ -135,17 +136,6 @@ def get_worker(worker_id: int, session: SessionDep, user: CurrentUser):
     return worker_read_from_worker(worker)
 
 
-def _get_owned_worker(worker_id: int, session: SessionDep, user: CurrentUser) -> Worker:
-    worker = session.scalar(
-        select(Worker)
-        .where(Worker.id == worker_id, Worker.user_id == user.id)
-        .with_for_update()
-    )
-    if worker is None:
-        raise HTTPException(404, "Worker not found")
-    return worker
-
-
 @worker_router.put("/workers/{worker_id}/supported-types", response_model=WorkerRead)
 def update_supported_types(
     worker_id: int,
@@ -153,19 +143,25 @@ def update_supported_types(
     session: SessionDep,
     user: CurrentUser,
 ):
-    worker = _get_owned_worker(worker_id, session, user)
+    worker = get_owned_worker(worker_id, session, user)
+    if worker is None:
+        raise HTTPException(404, "Worker not found")
     return update_worker_supported_types(session, worker, payload)
 
 
 @worker_router.post("/workers/{worker_id}/api-key", response_model=WorkerAPIKeyResponse)
 def reissue_api_key(worker_id: int, session: SessionDep, user: CurrentUser):
-    worker = _get_owned_worker(worker_id, session, user)
+    worker = get_owned_worker(worker_id, session, user)
+    if worker is None:
+        raise HTTPException(404, "Worker not found")
     return reissue_worker_api_key(session, worker)
 
 
 @worker_router.delete("/workers/{worker_id}", status_code=204)
 def delete_worker(worker_id: int, session: SessionDep, user: CurrentUser):
-    worker = _get_owned_worker(worker_id, session, user)
+    worker = get_owned_worker(worker_id, session, user)
+    if worker is None:
+        raise HTTPException(404, "Worker not found")
     try:
         delete_worker_service(session, worker)
     except WorkerDeletionConflict as exc:
