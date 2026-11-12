@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { ApiError } from './api/client'
 import { useAuth } from './auth'
+import { Icon } from './Icon'
 import styles from './App.module.css'
 
 type JobStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
@@ -75,10 +76,11 @@ export function JobDetailsPage({ history = false }: { history?: boolean }) {
   }
 
   return <>
-    <div className={styles.pageHeading}>
-      <Link to="/jobs">Back to Jobs</Link>
-      <h1>{history ? 'Attempt history' : 'Job details'}</h1>
-      {history ? <Link to={`/jobs/${jobId}`}>Back to job</Link> : <Link to="/jobs/new">Submit another job</Link>}
+    <div className={styles.collectionHeading}>
+      <div className={styles.detailTitle}><Link to="/jobs">Back to Jobs</Link>
+        <h1>{history ? 'Attempt history' : 'Job details'}</h1></div>
+      {history ? <Link className={styles.secondaryLink} to={`/jobs/${jobId}`}>Back to job</Link>
+        : <Link className={styles.primaryLink} to="/jobs/new"><Icon name="plus" size={17} />Submit another job</Link>}
     </div>
     {unavailable ? <section className={styles.placeholder}>
       <h2>Job unavailable</h2>
@@ -90,7 +92,7 @@ export function JobDetailsPage({ history = false }: { history?: boolean }) {
     </section> : !job ? <p role="status">Loading job details…</p> : <div className={styles.jobDetails}>
       {!history && <><section className={styles.placeholder} aria-label="Job overview">
         <h2>{job.job_type.replace(/[_-]+/g, ' ').replace(/^./, (letter) => letter.toUpperCase())} #{job.id}</h2>
-        <p role="status">{statusLabels[job.status]}</p>
+        <p className={styles.statusBadge} data-status={job.status} role="status">{statusLabels[job.status]}</p>
         <dl className={styles.metadata}>
           <div><dt>Job</dt><dd>#{job.id}</dd></div>
           <div><dt>Creator</dt><dd>{job.owner_username}{job.user_id === user?.id ? ' (you)' : ''}</dd></div>
@@ -116,7 +118,7 @@ export function JobDetailsPage({ history = false }: { history?: boolean }) {
           {attempts.length === 0 && <p>{offset ? 'No more execution attempts on this page.' : 'No execution attempts yet.'}</p>}
           {(history ? attempts : attempts.slice(0, 1)).map((attempt) => <article className={styles.attempt} key={attempt.id} aria-label={`Attempt ${attempt.attempt_number}`}>
             <h3>Attempt {attempt.attempt_number}</h3>
-            <p>{statusLabels[attempt.status]}</p>
+            <p className={styles.statusBadge} data-status={attempt.status}>{statusLabels[attempt.status]}</p>
             {attempt.status === 'LOST' && <p>The execution lease expired without a reported outcome. This attempt can no longer report a result.</p>}
             <dl className={styles.metadata}>
               <div><dt>Started</dt><dd><time dateTime={attempt.created_at}>{new Date(attempt.created_at).toLocaleString()}</time></dd></div>

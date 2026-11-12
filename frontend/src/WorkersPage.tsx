@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { ApiError } from './api/client'
 import { useAuth } from './auth'
+import { Icon } from './Icon'
+import { GroupedRows, ListControls, SortHeading } from './ListControls'
+import type { ListFilter } from './ListControls'
 import styles from './App.module.css'
 
 type Worker = {
@@ -20,6 +23,21 @@ type Worker = {
 const pageSize = 20
 const visibilityLabels = { PRIVATE: 'Private', PERMITTED_USERS: 'Permitted users', ALL: 'All users' }
 const credentialHelp = 'Active describes credential/registration status. It does not establish that a worker process is online.'
+const sorts = [
+  { value: '', label: 'Newest registered' },
+  { value: 'created_desc', label: 'Recently created' }, { value: 'created_asc', label: 'Oldest first' },
+  { value: 'name_asc', label: 'Name · A to Z' }, { value: 'name_desc', label: 'Name · Z to A' },
+  { value: 'owner_asc', label: 'Owner · A to Z' }, { value: 'owner_desc', label: 'Owner · Z to A' },
+  { value: 'active_desc', label: 'Active credentials first' }, { value: 'active_asc', label: 'Inactive credentials first' },
+]
+const groups = [{ value: 'active', label: 'Group by credential status' }, { value: 'owner', label: 'Group by owner' }, { value: 'visibility', label: 'Group by visibility' }]
+const filters: ListFilter[] = [
+  { key: 'owner_username', label: 'Owner username', placeholder: 'e.g. alex', maxLength: 16 },
+  { key: 'job_type', label: 'Supported job type', placeholder: 'e.g. add_numbers', maxLength: 100 },
+  { key: 'active', label: 'Credential/registration status', options: [{ value: 'true', label: 'Active' }, { value: 'false', label: 'Inactive' }] },
+  { key: 'created_from', label: 'Created from', type: 'datetime-local' },
+  { key: 'created_before', label: 'Created before', type: 'datetime-local' },
+]
 
 export function WorkersPage() {
   const { user, request } = useAuth()
@@ -29,13 +47,17 @@ export function WorkersPage() {
   const active = ['true', 'false'].includes(searchParams.get('active') ?? '') ? searchParams.get('active')! : ''
   const createdFrom = searchParams.get('created_from') ?? ''
   const createdBefore = searchParams.get('created_before') ?? ''
+  const sort = sorts.find(({ value }) => value === searchParams.get('sort'))?.value ?? ''
+  const group = groups.find(({ value }) => value === searchParams.get('group'))?.value ?? ''
   const rawOffset = searchParams.get('offset') ?? '0'
   const offset = /^\d+$/.test(rawOffset) && Number.isSafeInteger(Number(rawOffset)) ? Number(rawOffset) : 0
   const workers = useQuery({
-    queryKey: ['workers', user?.id, jobType, ownerUsername, active, createdFrom, createdBefore, offset],
+    queryKey: ['workers', user?.id, jobType, ownerUsername, active, createdFrom, createdBefore, sort, offset],
     enabled: !!user,
+    placeholderData: keepPreviousData,
     queryFn: async ({ signal }) => {
       const query = new URLSearchParams({ limit: String(pageSize), offset: String(offset) })
+      if (sort) query.set('sort', sort)
       if (ownerUsername) query.set('owner_username', ownerUsername)
       if (jobType) query.set('job_type', jobType)
       if (active) query.set('active', active)
@@ -53,80 +75,60 @@ export function WorkersPage() {
     setSearchParams(next)
   }
 
-  function filter(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
+  function changeSort(value: string) {
     const next = new URLSearchParams(searchParams)
-    for (const key of ['owner_username', 'job_type', 'active', 'created_from', 'created_before']) {
-      const value = String(form.get(key) ?? '')
-      if (value) next.set(key, value)
-      else next.delete(key)
-    }
+    next.set('sort', value)
     next.delete('offset')
     setSearchParams(next)
   }
 
   return <>
-    <div className={styles.pageHeading}>
-      <h1>Workers</h1>
-      <p>Register workers and browse workers you can access across owners.</p>
-      <Link className={styles.primaryLink} to="/workers/new">Register a worker</Link>
+    <div className={styles.collectionHeading}>
+      <div><p className={styles.eyebrow}>WORKSPACE / WORKER DIRECTORY</p><h1>Workers</h1>
+        <p>The independent engines behind your work.</p></div>
+      <div className={styles.inlineActions}><button className={styles.iconButton} type="button" aria-label="Refresh workers" title="Refresh workers" disabled={workers.isFetching} onClick={() => { void workers.refetch() }}><Icon name="refresh" /></button>
+        <Link className={styles.primaryLink} to="/workers/new"><Icon name="plus" size={17} />Register a worker</Link></div>
     </div>
-    <section className={styles.placeholder} aria-label="Accessible workers">
-      <form key={`${ownerUsername}|${jobType}|${active}|${createdFrom}|${createdBefore}`} onSubmit={filter} aria-label="Filter workers">
-        <div className={`${styles.authFields} ${styles.filters}`}>
-          <div>
-            <label htmlFor="worker-owner-filter">Owner username</label>
-            <input id="worker-owner-filter" name="owner_username" maxLength={16} defaultValue={ownerUsername} placeholder="All accessible owners" aria-describedby="worker-owner-help" />
-            <small id="worker-owner-help">Exact username. Blank includes all accessible owners.</small>
-          </div>
-          <div>
-            <label htmlFor="worker-type-filter">Supported job type</label>
-            <input id="worker-type-filter" name="job_type" defaultValue={jobType} maxLength={100} aria-describedby="worker-filter-help" />
-            <small id="worker-filter-help">Match an exact supported type, or leave blank for all types.</small>
-          </div>
-          <div>
-            <label htmlFor="worker-active-filter">Credential/registration status</label>
-            <select id="worker-active-filter" name="active" defaultValue={active} aria-describedby="worker-credential-help">
-              <option value="">All statuses</option>
-              <option value="true">Active</option>
-              <option value="false">Inactive</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="worker-created-from">Created from</label>
-            <input id="worker-created-from" name="created_from" type="datetime-local" step="1" defaultValue={createdFrom} aria-describedby="worker-created-help" />
-          </div>
-          <div>
-            <label htmlFor="worker-created-before">Created before</label>
-            <input id="worker-created-before" name="created_before" type="datetime-local" step="1" defaultValue={createdBefore} aria-describedby="worker-created-help" />
-          </div>
-        </div>
-        <p id="worker-created-help">Creation times use your local time zone. The upper bound is exclusive.</p>
-        <div className={styles.actions}>
-          <button type="submit">Apply filter</button>
-          <Link to="/workers">Clear filters</Link>
-        </div>
-      </form>
-      <p className={styles.actions} id="worker-credential-help">{credentialHelp}</p>
-      {workers.isPending ? <p role="status">Loading workers…</p> : workers.isError ? <>
+    <div className={styles.collectionIntro}><Icon name="workers" size={15} />Capability-based workers<span>Browse your registrations and shared workers</span></div>
+    <section className={styles.collection} aria-label="Accessible workers" aria-busy={workers.isFetching}>
+      <ListControls resource="workers" filters={filters} sorts={sorts} defaultSort="" groups={groups}>
+        <button type="button" className={styles.quickFilter} aria-pressed={ownerUsername === user?.username} onClick={() => {
+          const next = new URLSearchParams(searchParams)
+          if (ownerUsername === user?.username) next.delete('owner_username')
+          else next.set('owner_username', user!.username)
+          next.delete('offset')
+          setSearchParams(next)
+        }}>My workers</button>
+      </ListControls>
+      <div className={styles.resultsHeading}><h2>Worker directory</h2><span>{workers.data ? `${workers.data.length} on this page` : 'Worker collection'}</span></div>
+      {workers.isPending ? <div className={styles.emptyState}><span className={styles.loadingMark} /><p role="status">Loading workers…</p></div> : workers.isError ? <div className={styles.emptyState}>
         <p role="alert">{workers.error instanceof ApiError ? workers.error.message : 'Unable to load workers.'}</p>
         <button type="button" onClick={() => { void workers.refetch() }}>Try again</button>
-      </> : workers.data.length === 0 ? <p>{offset ? 'No more workers on this page.' : 'No accessible workers match these filters.'}</p> : <div className={styles.tableContainer}>
-        <table className={styles.jobsTable} aria-label="Registered workers">
-          <thead><tr><th scope="col">Name</th><th scope="col">Owner</th><th scope="col">Supported types</th><th scope="col">Credential/registration status</th><th scope="col">Visibility</th></tr></thead>
-          <tbody>{workers.data.map((worker) => <tr className={styles.jobRow} key={worker.id}>
-            <td><Link className={styles.jobLink} to={`/workers/${worker.id}`}>{worker.name}</Link></td>
-            <td>{worker.owner_username}{worker.user_id === user?.id ? ' (you)' : ''}</td>
-            <td>{worker.supported_types.join(', ')}</td>
-            <td>{worker.active ? 'Active' : 'Inactive'}</td>
-            <td>{visibilityLabels[worker.permission_policy]}</td>
-          </tr>)}</tbody>
+      </div> : workers.data.length === 0 ? <div className={styles.emptyState}><span className={styles.emptyIcon}><Icon name="workers" size={28} /></span><h3>Room for another engine.</h3><p>{offset ? 'No more workers on this page.' : 'No accessible workers match these filters.'}</p><span>Adjust your filters or register an independent worker.</span></div> : <div className={styles.tableContainer}>
+        <table className={styles.jobsTable} data-resource="workers" aria-label="Registered workers">
+          <thead><tr>
+            <SortHeading label="Name" ascending="name_asc" descending="name_desc" current={sort} onSort={changeSort} />
+            <SortHeading label="Owner" ascending="owner_asc" descending="owner_desc" current={sort} onSort={changeSort} />
+            <th scope="col">Supported types</th>
+            <SortHeading label="Credential/registration status" ascending="active_asc" descending="active_desc" current={sort} onSort={changeSort} />
+            <th scope="col">Visibility</th>
+          </tr></thead>
+          <GroupedRows key={`${group}:${offset}`} items={workers.data} group={group} columns={5}
+            groupLabel={(worker) => group === 'active' ? worker.active ? 'Active credentials' : 'Inactive credentials' : group === 'owner' ? worker.owner_username : visibilityLabels[worker.permission_policy]}
+            renderRow={(worker) => <tr className={styles.jobRow} key={worker.id}>
+              <td><Link className={styles.jobLink} to={`/workers/${worker.id}`}>{worker.name}</Link><span className={styles.recordId}>#{worker.id}</span></td>
+              <td><span className={styles.ownerCell}><span className={styles.smallAvatar} aria-hidden="true">{worker.owner_username.slice(0, 2).toUpperCase()}</span><span>{worker.owner_username}{worker.user_id === user?.id ? ' (you)' : ''}</span></span></td>
+              <td><span className={styles.typeTags}>{worker.supported_types.map((type, index) => <Fragment key={type}><span className={styles.typeTag}>{type}</span>{index < worker.supported_types.length - 1 ? ', ' : ''}</Fragment>)}</span></td>
+              <td><span className={styles.statusBadge} data-status={worker.active ? 'SUCCEEDED' : 'PENDING'}>{worker.active ? 'Active' : 'Inactive'}</span></td>
+              <td><span className={styles.visibility}>{visibilityLabels[worker.permission_policy]}</span></td>
+            </tr>} />
         </table>
       </div>}
-      {!workers.isPending && !workers.isError && (offset > 0 || workers.data.length === pageSize) && <nav className={styles.actions} aria-label="Worker pages">
-        <button type="button" disabled={offset === 0 || workers.isFetching} onClick={() => changePage(Math.max(0, offset - pageSize))}>Previous workers</button>
-        <button type="button" disabled={workers.data.length < pageSize || workers.isFetching} onClick={() => changePage(offset + pageSize)}>Next workers</button>
+      <p className={styles.credentialNote}>{credentialHelp}</p>
+      {!workers.isPending && !workers.isError && (offset > 0 || workers.data.length === pageSize) && <nav className={styles.pagination} aria-label="Worker pages">
+        <span>Page {Math.floor(offset / pageSize) + 1}<span className={styles.pageSize}>20 per page</span></span>
+        <div className={styles.inlineActions}><button className={styles.controlButton} type="button" disabled={offset === 0 || workers.isFetching} onClick={() => changePage(Math.max(0, offset - pageSize))}>Previous workers</button>
+        <button className={styles.controlButton} type="button" disabled={workers.data.length < pageSize || workers.isFetching} onClick={() => changePage(offset + pageSize)}>Next workers<Icon name="arrow" size={15} /></button></div>
       </nav>}
     </section>
   </>

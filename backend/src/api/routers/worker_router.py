@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import AwareDatetime
 from sqlalchemy import select
@@ -60,6 +62,10 @@ def list_workers(
     created_before: AwareDatetime | None = None,
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    sort: Literal[
+        "created_asc", "created_desc", "name_asc", "name_desc",
+        "owner_asc", "owner_desc", "active_asc", "active_desc",
+    ] | None = None,
 ):
     if created_from is not None and created_before is not None and created_from >= created_before:
         raise HTTPException(422, "created_from must be earlier than created_before")
@@ -85,7 +91,20 @@ def list_workers(
     if created_before is not None:
         stmt = stmt.where(Worker.created_at < created_before)
 
-    stmt = stmt.order_by(Worker.id.desc()).offset(offset).limit(limit)
+    if sort is not None:
+        field, direction = sort.rsplit("_", 1)
+        if field == "owner":
+            stmt = stmt.join(Worker.user)
+        column = {
+            "created": Worker.created_at, "name": Worker.name,
+            "owner": User.username, "active": Worker.active,
+        }[field]
+        stmt = stmt.order_by(
+            column.asc() if direction == "asc" else column.desc(), Worker.id.desc()
+        )
+    else:
+        stmt = stmt.order_by(Worker.id.desc())
+    stmt = stmt.offset(offset).limit(limit)
 
     stmt = stmt.options(
         joinedload(Worker.user).load_only(User.username),

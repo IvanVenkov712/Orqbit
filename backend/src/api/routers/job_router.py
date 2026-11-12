@@ -54,7 +54,11 @@ def list_jobs(
     created_before: AwareDatetime | None = None,
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    sort: Literal["status_updated"] | None = None,
+    sort: Literal[
+        "status_updated", "status_desc", "created_asc", "created_desc",
+        "updated_asc", "updated_desc", "type_asc", "type_desc",
+        "owner_asc", "owner_desc",
+    ] | None = None,
 ):
     if created_from is not None and created_before is not None and created_from >= created_before:
         raise HTTPException(422, "created_from must be earlier than created_before")
@@ -93,6 +97,19 @@ def list_jobs(
 
     if sort == "status_updated":
         stmt = stmt.order_by(Job.status, Job.updated_at.desc(), Job.id.desc())
+    elif sort == "status_desc":
+        stmt = stmt.order_by(Job.status.desc(), Job.updated_at.desc(), Job.id.desc())
+    elif sort is not None:
+        field, direction = sort.rsplit("_", 1)
+        if field == "owner":
+            stmt = stmt.join(Job.user)
+        column = {
+            "created": Job.created_at, "updated": Job.updated_at,
+            "type": Job.job_type, "owner": User.username,
+        }[field]
+        stmt = stmt.order_by(
+            column.asc() if direction == "asc" else column.desc(), Job.id.desc()
+        )
     else:
         stmt = stmt.order_by(Job.id.desc())
 

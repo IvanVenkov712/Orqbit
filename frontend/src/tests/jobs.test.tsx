@@ -8,11 +8,117 @@ import {
 
 setupAppTests()
 
+test('sorts on the server from columns and the toolbar, resets paging and restores history', async () => {
+  await enterApp('/jobs?status=ALL&offset=20&owner_username=other-owner&group=owner&view=shared')
+  await screen.findByRole('table', { name: 'Submitted jobs' })
+  fireEvent.click(screen.getByRole('button', { name: 'Type' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => {
+    const query = new URL(String(path), 'http://localhost').searchParams
+    return query.get('sort') === 'type_asc' && query.get('offset') === '0' && query.get('owner_username') === 'other-owner'
+  })).toBe(true))
+  expect(new URLSearchParams(window.location.search).get('group')).toBe('owner')
+  expect(new URLSearchParams(window.location.search).get('view')).toBe('shared')
+  expect(screen.getByRole('columnheader', { name: 'Type' }).getAttribute('aria-sort')).toBe('ascending')
+  fireEvent.click(screen.getByRole('button', { name: 'Type' }))
+  expect((screen.getByLabelText('Sort jobs') as HTMLSelectElement).value).toBe('type_desc')
+  fireEvent.change(screen.getByLabelText('Sort jobs'), { target: { value: 'created_desc' } })
+  await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Created' }).getAttribute('aria-sort')).toBe('descending'))
+  await act(async () => { window.history.back() })
+  await waitFor(() => expect((screen.getByLabelText('Sort jobs') as HTMLSelectElement).value).toBe('type_desc'))
+})
+
+test('groups the current page without another request and collapses only the selected group', async () => {
+  mockApi(async (path) => String(path).startsWith('/api/jobs?') ? response([
+    { ...job, id: 10, status: 'PENDING' }, { ...job, id: 11, status: 'PENDING' }, { ...job, id: 12, status: 'RUNNING' },
+  ]) : undefined)
+  await enterApp('/jobs?status=ALL')
+  await screen.findByRole('table', { name: 'Submitted jobs' })
+  const calls = fetchMock.mock.calls.length
+  fireEvent.change(screen.getByLabelText('Group jobs'), { target: { value: 'status' } })
+  const pending = screen.getByRole('rowgroup', { name: 'Pending group' })
+  expect(within(pending).getAllByRole('link')).toHaveLength(2)
+  expect(fetchMock.mock.calls.length).toBe(calls)
+  const toggle = within(pending).getByRole('button')
+  fireEvent.click(toggle)
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  expect(screen.queryByRole('link', { name: 'View job #10' })).toBeNull()
+  expect(screen.getByRole('link', { name: 'View job #12' })).toBeTruthy()
+  fireEvent.click(toggle)
+  expect(screen.getByRole('link', { name: 'View job #10' })).toBeTruthy()
+  cleanup()
+  render(<App />)
+  await screen.findByRole('rowgroup', { name: 'Pending group' })
+  expect((screen.getByLabelText('Group jobs') as HTMLSelectElement).value).toBe('status')
+})
+
+test('removes one filter while preserving the view and resets paging', async () => {
+  await enterApp('/jobs?status=ALL&owner_username=alex&job_type=add_numbers&offset=20&sort=type_asc&group=status')
+  await screen.findByRole('table', { name: 'Submitted jobs' })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove owner username filter' }))
+  const query = new URLSearchParams(window.location.search)
+  expect(query.has('owner_username')).toBe(false)
+  expect(query.has('offset')).toBe(false)
+  expect(query.get('job_type')).toBe('add_numbers')
+  expect(query.get('sort')).toBe('type_asc')
+  expect(query.get('group')).toBe('status')
+})
+
+test('filter panel supports keyboard dismissal and discards cancelled changes', async () => {
+  await enterApp('/jobs?owner_username=alex')
+  const trigger = screen.getByRole('button', { name: 'Filters' })
+  expect(trigger.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.click(trigger)
+  const input = screen.getByLabelText('Owner username')
+  expect(document.activeElement).toBe(input)
+  fireEvent.change(input, { target: { value: 'cancelled' } })
+  fireEvent.keyDown(input, { key: 'Escape' })
+  expect(document.activeElement).toBe(trigger)
+  expect(screen.queryByRole('form', { name: 'Filter jobs' })).toBeNull()
+  fireEvent.click(trigger)
+  expect((screen.getByLabelText('Owner username') as HTMLInputElement).value).toBe('alex')
+  expect(new URLSearchParams(window.location.search).get('owner_username')).toBe('alex')
+})
+
+test('my jobs is a reversible owner shortcut and preserves other filters', async () => {
+  await enterApp('/jobs?status=ALL&job_type=add_numbers&offset=20')
+  fireEvent.click(screen.getByRole('button', { name: 'My jobs' }))
+  expect(new URLSearchParams(window.location.search).get('owner_username')).toBe(user.username)
+  expect(new URLSearchParams(window.location.search).has('offset')).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'My jobs' }))
+  expect(new URLSearchParams(window.location.search).has('owner_username')).toBe(false)
+  expect(new URLSearchParams(window.location.search).get('job_type')).toBe('add_numbers')
+})
+
+test('date shortcuts prepare an exact range and apply it only on submission', async () => {
+  const instant = new Date('2026-11-12T12:00:00Z')
+  vi.spyOn(Date, 'now').mockReturnValue(instant.getTime())
+  await enterApp('/jobs?status=ALL')
+  fireEvent.click(screen.getByRole('button', { name: 'Filters' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Last 7 days' }))
+  expect(window.location.search).toBe('?status=ALL')
+  expect(new Date((screen.getByLabelText('Created from') as HTMLInputElement).value).toISOString()).toBe('2026-11-05T12:00:00.000Z')
+  expect(new Date((screen.getByLabelText('Created before') as HTMLInputElement).value).toISOString()).toBe(instant.toISOString())
+  fireEvent.submit(screen.getByRole('form', { name: 'Filter jobs' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => {
+    const query = new URL(String(path), 'http://localhost').searchParams
+    return query.get('created_from') === '2026-11-05T12:00:00.000Z' && query.get('created_before') === instant.toISOString()
+  })).toBe(true))
+})
+
+test('ignores unsupported sorting and grouping values before requesting data', async () => {
+  await enterApp('/jobs?sort=invalid&group=invalid')
+  await screen.findByRole('table', { name: 'Submitted jobs' })
+  expect((screen.getByLabelText('Sort jobs') as HTMLSelectElement).value).toBe('status_updated')
+  expect((screen.getByLabelText('Group jobs') as HTMLSelectElement).value).toBe('')
+  expect(fetchMock.mock.calls.some(([path]) => String(path).includes('sort=invalid'))).toBe(false)
+})
+
 test('combines owner, exact type and creation filters before paging and restores them on navigation', async () => {
   await enterApp('/jobs?status=ALL&offset=20&view=shared')
   await screen.findByRole('table', { name: 'Submitted jobs' })
   const from = '2026-11-10T10:00:00'
   const before = '2026-11-11T10:00:00'
+  fireEvent.click(screen.getByRole('button', { name: 'Filters' }))
   fireEvent.change(screen.getByLabelText('Owner username'), { target: { value: 'other-owner' } })
   fireEvent.change(screen.getByLabelText('Job type'), { target: { value: 'sum & more' } })
   fireEvent.change(screen.getByLabelText('Created from'), { target: { value: from } })
@@ -40,7 +146,7 @@ test('combines owner, exact type and creation filters before paging and restores
   expect((screen.getByLabelText('Job type') as HTMLInputElement).value).toBe('sum & more')
   expect(new Date((screen.getByLabelText('Created from') as HTMLInputElement).value).getTime()).toBe(new Date(from).getTime())
   fireEvent.click(screen.getByRole('link', { name: 'Clear filters' }))
-  await waitFor(() => expect(window.location.search).toBe('?status=ALL'))
+  await waitFor(() => expect(window.location.search).toBe('?status=ALL&view=shared'))
 })
 
 test('shows an empty list for an unknown owner username', async () => {
@@ -105,7 +211,7 @@ test('lists accessible jobs across owners with readable dates and links to detai
     : undefined)
   await enterApp()
   const table = await screen.findByRole('table', { name: 'Submitted jobs' })
-  expect(within(table).getAllByRole('columnheader').map((header) => header.textContent)).toEqual(['Owner', 'Type', 'Status', 'Created', 'Last updated'])
+  expect(within(table).getAllByRole('columnheader').map((header) => header.textContent?.replace(/[↕↑↓]/g, ''))).toEqual(['Owner', 'Type', 'Status', 'Created', 'Last updated'])
   expect(within(table).getAllByText('demo-user (you)')).toHaveLength(2)
   expect(within(table).getByText('other-owner')).toBeTruthy()
   expect(within(table).getByText('generate_report')).toBeTruthy()

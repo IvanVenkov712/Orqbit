@@ -16,7 +16,10 @@ test('logs in with form data, loads the current user, and restores the requested
   await enterApp('/workers/17?view=details#registration')
   expect(window.location.pathname + window.location.search + window.location.hash).toBe('/workers/17?view=details#registration')
   expect(screen.getByRole('heading', { level: 1, name: 'Worker details' })).toBeTruthy()
-  expect(screen.getByRole('group', { name: 'Current user' }).textContent).toBe('Demo User (demo-user)Sign out')
+  const currentUser = screen.getByRole('group', { name: 'Current user' })
+  expect(currentUser.textContent).toContain('Demo User')
+  expect(currentUser.textContent).toContain('@demo-user')
+  expect(screen.getByRole('button', { name: 'Sign out' })).toBeTruthy()
   const [loginPath, loginOptions] = fetchMock.mock.calls[0]
   expect(loginPath).toBe('/api/auth/login')
   expect(loginOptions?.method).toBe('POST')

@@ -295,6 +295,51 @@ def test_list_jobs_rejects_unknown_sort(client, user_headers):
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize("sort, order", [
+    ("created_asc", [0, 2, 1, 3]), ("created_desc", [3, 2, 1, 0]),
+    ("updated_asc", [1, 2, 3, 0]), ("updated_desc", [3, 0, 2, 1]),
+    ("type_asc", [1, 3, 2, 0]), ("type_desc", [0, 3, 2, 1]),
+    ("owner_asc", [3, 1, 2, 0]), ("owner_desc", [2, 0, 3, 1]),
+    ("status_desc", [1, 3, 2, 0]),
+])
+def test_job_column_sorts_preserve_visibility_and_order_before_paging(
+    client, database, user, user_headers, job_factory, sort, order
+):
+    start = datetime(2026, 11, 10, tzinfo=UTC)
+    with Session(database) as session:
+        other = User(
+            username="alpha", email="alpha@example.com",
+            full_name="Alpha", hashed_password="unused",
+        )
+        session.add(other)
+        session.flush()
+        jobs = [
+            job_factory(
+                user_id=owner_id, job_type=job_type, status=status,
+                permission_policy=PermissionPolicy.ALL,
+                created_at=start + timedelta(hours=created),
+                updated_at=start + timedelta(hours=updated),
+            )
+            for owner_id, job_type, status, created, updated in [
+                (user.id, "zeta", JobStatus.PENDING, 1, 3),
+                (other.id, "alpha", JobStatus.FAILED, 2, 1),
+                (user.id, "beta", JobStatus.RUNNING, 2, 2),
+                (other.id, "beta", JobStatus.SUCCEEDED, 3, 3),
+            ]
+        ]
+        session.add_all(jobs)
+        session.add(job_factory(user_id=other.id, permission_policy=PermissionPolicy.PRIVATE))
+        session.commit()
+        expected = [jobs[index].id for index in order]
+
+    for offset, limit in [(0, 50), (0, 2), (2, 2)]:
+        response = client.get("/jobs", headers=user_headers, params={
+            "sort": sort, "offset": offset, "limit": limit,
+        })
+        assert response.status_code == 200
+        assert [job["id"] for job in response.json()] == expected[offset:offset + limit]
+
+
 @pytest.mark.parametrize("status", list(JobStatus))
 def test_list_jobs_returns_summaries_without_loading_payloads_or_attempts(
     client, database, user_headers, claim_worker, status

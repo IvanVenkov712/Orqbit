@@ -89,6 +89,56 @@ def test_list_workers_rejects_invalid_active_filter(client, user_headers):
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize("sort, order", [
+    ("created_asc", [0, 2, 1, 3]), ("created_desc", [3, 2, 1, 0]),
+    ("name_asc", [2, 1, 3, 0]), ("name_desc", [0, 3, 1, 2]),
+    ("owner_asc", [3, 1, 2, 0]), ("owner_desc", [2, 0, 3, 1]),
+    ("active_asc", [3, 1, 2, 0]), ("active_desc", [2, 0, 3, 1]),
+])
+def test_worker_column_sorts_preserve_visibility_and_order_before_paging(
+    client, database, user, user_headers, sort, order
+):
+    start = datetime(2026, 11, 10, tzinfo=UTC)
+    with Session(database) as session:
+        other = User(
+            username="alpha", email="alpha@example.com",
+            full_name="Alpha", hashed_password="unused",
+        )
+        session.add(other)
+        session.flush()
+        workers = [
+            Worker(
+                name=name, user_id=owner_id, active=active,
+                permission_policy=PermissionPolicy.ALL, secret_api_key_hash=name,
+                created_at=start + timedelta(hours=hours),
+                supported_types=[SupportedJobType(type_name="example")],
+            )
+            for name, owner_id, active, hours in [
+                ("zeta", user.id, True, 1), ("beta", other.id, False, 2),
+                ("alpha", user.id, True, 2), ("gamma", other.id, False, 3),
+            ]
+        ]
+        session.add_all(workers)
+        session.add(Worker(
+            name="hidden", user_id=other.id, permission_policy=PermissionPolicy.PRIVATE,
+            secret_api_key_hash="hidden", supported_types=[SupportedJobType(type_name="example")],
+        ))
+        session.commit()
+        expected = [workers[index].id for index in order]
+
+    for offset, limit in [(0, 50), (0, 2), (2, 2)]:
+        response = client.get("/workers", headers=user_headers, params={
+            "sort": sort, "offset": offset, "limit": limit,
+        })
+        assert response.status_code == 200
+        assert [worker["id"] for worker in response.json()] == expected[offset:offset + limit]
+
+
+def test_list_workers_rejects_unknown_sort(client, user_headers):
+    response = client.get("/workers?sort=unknown", headers=user_headers)
+    assert response.status_code == 422
+
+
 def test_registered_worker_key_claims_and_is_not_exposed_by_reads(
     client, database, user, user_headers
 ):

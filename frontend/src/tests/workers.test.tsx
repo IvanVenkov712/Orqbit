@@ -8,6 +8,25 @@ import {
 
 setupAppTests()
 
+test('sorts all workers through the API and groups credential status on the current page', async () => {
+  mockApi(async (path) => String(path).startsWith('/api/workers?') ? response([
+    worker, { ...worker, id: 18, name: 'inactive-worker', active: false },
+  ]) : undefined)
+  await enterApp('/workers?offset=20&view=shared')
+  await screen.findByRole('table', { name: 'Registered workers' })
+  fireEvent.click(screen.getByRole('button', { name: 'Name' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path) === '/api/workers?limit=20&offset=0&sort=name_asc')).toBe(true))
+  expect(new URLSearchParams(window.location.search).get('view')).toBe('shared')
+  expect(screen.getByRole('columnheader', { name: 'Name' }).getAttribute('aria-sort')).toBe('ascending')
+  fireEvent.change(screen.getByLabelText('Group workers'), { target: { value: 'active' } })
+  const inactive = screen.getByRole('rowgroup', { name: 'Inactive credentials group' })
+  fireEvent.click(within(inactive).getByRole('button'))
+  expect(screen.queryByRole('link', { name: 'inactive-worker' })).toBeNull()
+  expect(screen.getByRole('link', { name: worker.name })).toBeTruthy()
+  fireEvent.change(screen.getByLabelText('Sort workers'), { target: { value: 'owner_desc' } })
+  expect(new URLSearchParams(window.location.search).get('group')).toBe('active')
+})
+
 test('opens an accessible worker belonging to another owner without exposing credentials', async () => {
   mockApi(async (path) => path === '/api/workers/17'
     ? response({ ...worker, user_id: 888, owner_username: 'other-owner', name: 'shared-worker', secret_api_key: 'never-show-key' }) : undefined)
@@ -25,6 +44,7 @@ test('combines worker owner, type, registration status and creation filters befo
   await screen.findByRole('table', { name: 'Registered workers' })
   const from = '2026-11-10T10:00:00'
   const before = '2026-11-11T10:00:00'
+  fireEvent.click(screen.getByRole('button', { name: 'Filters' }))
   fireEvent.change(screen.getByLabelText('Owner username'), { target: { value: 'other-owner' } })
   fireEvent.change(screen.getByLabelText('Supported job type'), { target: { value: 'sum & more' } })
   fireEvent.change(screen.getByLabelText('Credential/registration status'), { target: { value: 'false' } })
@@ -51,7 +71,7 @@ test('combines worker owner, type, registration status and creation filters befo
   expect((screen.getByLabelText('Owner username') as HTMLInputElement).value).toBe('other-owner')
   expect((screen.getByLabelText('Credential/registration status') as HTMLSelectElement).value).toBe('false')
   fireEvent.click(screen.getByRole('link', { name: 'Clear filters' }))
-  await waitFor(() => expect(window.location.search).toBe(''))
+  await waitFor(() => expect(window.location.search).toBe('?view=shared'))
 })
 
 test('shows an empty list for an unknown owner username', async () => {
@@ -116,13 +136,16 @@ test('preserves worker type filters, pages and unrelated parameters across navig
   fireEvent.click(screen.getByRole('button', { name: 'Previous workers' }))
   await screen.findByRole('table', { name: 'Registered workers' })
   expect(window.location.search).toBe('?job_type=add_numbers&offset=20&view=mine')
+  fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))
   fireEvent.change(screen.getByLabelText('Supported job type'), { target: { value: 'sum & more' } })
   fireEvent.submit(screen.getByRole('form', { name: 'Filter workers' }))
   await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers?limit=20&offset=0&job_type=sum+%26+more')).toBe(true))
   expect(window.location.search).toBe('?job_type=sum+%26+more&view=mine')
   await act(async () => { window.history.back() })
-  await waitFor(() => expect(window.location.search).toBe('?job_type=add_numbers&offset=20&view=mine'))
-  expect((screen.getByLabelText('Supported job type') as HTMLInputElement).value).toBe('add_numbers')
+  await waitFor(() => {
+    expect(window.location.search).toBe('?job_type=add_numbers&offset=20&view=mine')
+    expect((screen.getByLabelText('Supported job type') as HTMLInputElement).value).toBe('add_numbers')
+  })
   await act(async () => { window.history.forward() })
   await waitFor(() => expect((screen.getByLabelText('Supported job type') as HTMLInputElement).value).toBe('sum & more'))
   cleanup()
@@ -130,6 +153,7 @@ test('preserves worker type filters, pages and unrelated parameters across navig
   await screen.findByRole('table', { name: 'Registered workers' })
   expect((screen.getByLabelText('Supported job type') as HTMLInputElement).value).toBe('sum & more')
   expect(window.location.search).toBe('?job_type=sum+%26+more&view=mine')
+  fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))
   fireEvent.change(screen.getByLabelText('Supported job type'), { target: { value: '' } })
   fireEvent.submit(screen.getByRole('form', { name: 'Filter workers' }))
   expect(window.location.search).toBe('?view=mine')

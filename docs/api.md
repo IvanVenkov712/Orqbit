@@ -39,7 +39,9 @@ Submission also requires an `Idempotency-Key` header containing 1–100 characte
 
 Migration `4610066358ca` adds the required columns and uniqueness on `(user_id, idempotency_key)`. It preserves existing jobs by assigning each a synthetic key `legacy-job:<job_id>` and the fingerprint marker `legacy` before making both columns non-nullable. Original submission keys cannot be recovered, so historical jobs do not support submission replay. Future submissions must supply their own keys; the columns have no defaults.
 
-`GET /jobs` defaults to `limit=50`, `offset=0`; limit must be 1?100 and offset nonnegative. Filters are combined with permission checks. The optional `sort=status_updated` orders by lifecycle status (`PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`), then descending update time and ID; other sort values return 422.
+`GET /jobs` defaults to `limit=50`, `offset=0`; limit must be 1?100 and offset nonnegative. Filters are combined with permission checks. The optional `sort=status_updated` orders by lifecycle status (`PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`), then descending update time and ID. `status_desc` reverses lifecycle status order while retaining descending update time and ID within each status. `created_asc`/`created_desc`, `updated_asc`/`updated_desc`, `type_asc`/`type_desc`, and `owner_asc`/`owner_desc` sort by creation time, update time, exact job type, and owner username respectively. These column sorts use descending ID to break ties. Unsupported sort values return 422; omitting `sort` preserves newest-ID-first ordering.
+
+The frontend exposes sorting through the toolbar and column headers. Filters and sorting apply to all accessible matching records **before pagination**. Its collapsible status/type/owner groups and counts describe the current page only. Filter chips remove individual conditions; clearing filters preserves sorting, grouping, status view, and unrelated URL parameters. Filters, sorting, grouping, and pagination survive reloads and browser history through the URL.
 
 The list returns a JSON array of `JobSummaryRead` objects containing only `id`, `user_id`, `owner_username`, `job_type`, `status`, `created_at`, and `updated_at`. The database query fetches these job columns and the owner's username in one query and does not load attempts. No matches or an offset beyond the results returns 200 with `[]`.
 
@@ -122,12 +124,14 @@ The [quickstart](quickstart.md) provides executable registration/login and job-s
 | Method | Route | Request | Response |
 | --- | --- | --- | --- |
 | POST | `/workers` | JSON: `name`, `supported_types`, `permission_policy`; optional `permitted_user_ids` | Worker metadata plus `secret_api_key` |
-| GET | `/workers` | Optional `owner_username`, `owner_id`, `job_type`, `active`, `created_from`, `created_before`, `limit`, `offset` | Accessible workers, newest ID first |
+| GET | `/workers` | Optional `owner_username`, `owner_id`, `job_type`, `active`, `created_from`, `created_before`, `limit`, `offset`, `sort` | Accessible workers, newest ID first by default |
 | GET | `/workers/{worker_id}` | Worker ID | Accessible worker, or 404 |
 
 These routes require a user token. `supported_types` is a nonempty set of strings; each entry follows the job-type rules above. Duplicate types are deduplicated. Permitted-user IDs must exist. Pagination defaults and bounds match job lists; `job_type` filters workers supporting that type.
 
 Omit owner filters for all accessible owners or supply `owner_username` to match an exact, case-sensitive username. The same username rules and compatibility with `owner_id` apply as for jobs. `active=true` or `active=false` filters credential/registration status; omitting it includes both. This does not indicate whether a worker process is online. Creation-time filters use the same inclusive `created_from`, exclusive `created_before`, timezone and range-validation rules as jobs, applied to the worker's creation time. Filters and visibility checks apply before pagination. The frontend exposes these filters in the URL and allows viewing accessible workers owned by other users; worker states do not include `LOST`.
+
+Worker sorting accepts `created_asc`/`created_desc`, `name_asc`/`name_desc`, `owner_asc`/`owner_desc`, and `active_asc`/`active_desc`. Credential status sorts inactive first with `active_asc`, active first with `active_desc`. All sorts apply before pagination, preserve visibility checks, and use descending ID to break ties. Unsupported values return 422. Omitting `sort` retains newest-ID-first ordering. The frontend can group the current page by credential status, owner, or visibility.
 
 Worker visibility policies are `PRIVATE` (owner only), `PERMITTED_USERS` (owner plus listed users), and `ALL` (all authenticated users). Visibility lets users inspect metadata; it does not reveal the API key or let them claim as that worker. Claims use the worker owner's job permissions plus explicit worker grants.
 

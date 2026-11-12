@@ -19,43 +19,48 @@ import { JobsPage } from './JobsPage'
 import { RegisterWorkerPage, WorkerDetailsPage, WorkersPage } from './WorkersPage'
 import { ParameterEditor, readParameters } from './ParameterEditor'
 import type { Parameter } from './ParameterEditor'
+import { Icon } from './Icon'
 import orqbitIcon from './assets/orqbit-icon.svg'
 import styles from './App.module.css'
 
 function AppLayout() {
   const { user, logout, restoring, restoreError } = useAuth()
+  const location = useLocation()
+  const section = location.pathname.startsWith('/workers') ? 'Workers' : location.pathname.startsWith('/jobs') ? 'Jobs' : 'Account'
   return (
-    <div className={styles.app}>
+    <div className={`${styles.app} ${!user ? styles.signedOut : ''}`}>
       <a className={styles.skipLink} href="#main-content">Skip to content</a>
-      <header className={styles.header}>
+      <aside className={styles.sidebar}>
         <div className={styles.headerInner}>
           <Link className={styles.brand} to="/jobs" aria-label="Orqbit home">
             <img src={orqbitIcon} alt="" width="36" height="36" />
-            Orqbit
+            <span>Orqbit<span className={styles.brandCaption}>JOB ORCHESTRATION</span></span>
           </Link>
+          <p className={styles.navCaption}>Workspace</p>
           <nav className={styles.navigation} aria-label="Main navigation">
-            <NavLink to="/jobs">Jobs</NavLink>
-            <NavLink to="/workers">Workers</NavLink>
+            <NavLink to="/jobs" title="Jobs"><Icon name="jobs" />Jobs<Icon name="chevron" size={14} /></NavLink>
+            <NavLink to="/workers" title="Workers"><Icon name="workers" />Workers<Icon name="chevron" size={14} /></NavLink>
           </nav>
+          <div className={styles.sidebarNote}><span className={styles.orbitDecoration} aria-hidden="true">◎</span><strong>Work, in motion.</strong><p>Independent workers.<br />One clear view.</p></div>
           <div className={styles.userArea} role="group" aria-label="Current user">
             {restoring ? <span>Checking session…</span> : restoreError ? <span>Session unavailable</span> : user ? <>
-              <span>{user.full_name || user.username} ({user.username})</span>
-              <button type="button" onClick={logout}>Sign out</button>
+              <span className={styles.avatar} aria-hidden="true">{(user.full_name || user.username).slice(0, 2).toUpperCase()}</span>
+              <span className={styles.userIdentity}><strong>{user.full_name || user.username}</strong><small>@{user.username}</small></span>
+              <button className={styles.signOutButton} type="button" aria-label="Sign out" title="Sign out" onClick={logout}><Icon name="logout" /></button>
             </> : <>
               <span>Not signed in</span>
               <Link to="/login">Sign in</Link>
             </>}
           </div>
         </div>
-      </header>
-
-      <main id="main-content" className={styles.main} tabIndex={-1}>
-        <Outlet />
-      </main>
-
-      <footer className={styles.footer}>
-        Orqbit · Asynchronous job processing
-      </footer>
+      </aside>
+      <div className={styles.workspace}>
+        <header className={styles.header}><div className={styles.breadcrumb}><span>Workspace</span><Icon name="chevron" size={13} /><strong>{section}</strong></div>
+          <span className={styles.consoleLabel}>Orqbit console</span>
+        </header>
+        <main id="main-content" className={styles.main} tabIndex={-1}><Outlet /></main>
+        <footer className={styles.footer}><span>Orqbit</span><span>Asynchronous work. A clearer picture.</span></footer>
+      </div>
     </div>
   )
 }
