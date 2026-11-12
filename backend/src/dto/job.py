@@ -47,6 +47,9 @@ class JobRead(BaseModel):
     error: dict[str, Any] | None = None
     status: JobStatus
     attempt_ids: list[int] = Field(validation_alias="attempts")
+    max_attempts: int
+    attempts_count: int
+    available_at: datetime
     created_at: datetime
     updated_at: datetime
 

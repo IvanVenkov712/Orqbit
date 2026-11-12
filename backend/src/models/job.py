@@ -1,9 +1,20 @@
 import enum
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Enum, ForeignKey, String, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from config import settings
 
 from .base import Base, TimestampMixin
 
@@ -38,6 +49,13 @@ class Job(Base, TimestampMixin):
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus),
         default=JobStatus.PENDING,
+    )
+
+    max_attempts: Mapped[int] = mapped_column(default=lambda: settings.max_attempts)
+    attempts_count: Mapped[int] = mapped_column(default=0)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.clock_timestamp(),
     )
 
     permission_policy: Mapped[PermissionPolicy] = mapped_column(
@@ -75,4 +93,9 @@ class Job(Base, TimestampMixin):
     
     __table_args__ = (
         UniqueConstraint("user_id", "idempotency_key"),
+        CheckConstraint("max_attempts > 0", name="ck_jobs_positive_max_attempts"),
+        CheckConstraint(
+            "attempts_count >= 0 AND attempts_count <= max_attempts",
+            name="ck_jobs_attempts_count_within_limit",
+        ),
     )

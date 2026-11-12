@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     database_url: PostgresDsn
     lease_seconds: PositiveInt
     lease_extension_seconds: PositiveInt
+    max_attempts: PositiveInt = Field(default=1, le=5)
     secret_key: str = Field(pattern=r"^[0-9a-f]{64}$")
     algorithm: str
     access_token_expire_minutes: PositiveInt
