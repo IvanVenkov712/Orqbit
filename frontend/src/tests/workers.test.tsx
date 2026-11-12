@@ -173,6 +173,7 @@ test.each(['/workers', '/workers/17'])('shows worker loading and failure states 
   })
   await enterApp(route)
   expect(screen.getByRole('status').textContent).toMatch(/Loading worker/)
+  await waitFor(() => expect(resolve).toBeTypeOf('function'))
   await act(async () => { resolve(response({ detail: 'private server detail' }, 503)) })
   expect((await screen.findByRole('alert')).textContent).toContain('temporarily unavailable')
   fail = false

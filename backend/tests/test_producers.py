@@ -1,6 +1,8 @@
-"""Producer service and DTO coverage while its schema migration is pending."""
+"""Producer service, API, and PostgreSQL integration coverage."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Barrier
 from unittest.mock import Mock, patch
 
 import pytest
@@ -8,6 +10,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from psycopg.errors import ForeignKeyViolation, NotNullViolation, UniqueViolation
 from pydantic import ValidationError
+from sqlalchemy import event, func, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -15,6 +18,7 @@ from sqlalchemy.orm import Session
 from dto.job import JobCreate
 from dto.producer import ProducerAPIKeyResponse, ProducerCreate, ProducerCreateResponse
 from models.job import Job, JobStatus, PermissionPolicy
+from models.job_attempts import JobAttempt
 from models.producers import Producer
 from models.user import User
 from services.api_key_auth import hash_api_key
@@ -851,3 +855,284 @@ def test_producer_job_route_authenticates_real_dependency(
     auth_stmt = management_session.scalar.call_args_list[0].args[0]
     compiled = auth_stmt.compile(dialect=postgresql.dialect())
     assert list(compiled.params.values()) == [hash_api_key("old-key")]
+
+
+@pytest.fixture
+def registered_producer(client, user_headers):
+    response = client.post(
+        "/producers", headers=user_headers, json={"name": "test-producer"}
+    )
+    assert response.status_code == 200
+    created = response.json()
+    return created, {"X-API-Key": created["secret_api_key"]}
+
+
+@pytest.mark.parametrize(
+    "outcome, field, status",
+    [("succeed", "result", JobStatus.SUCCEEDED), ("fail", "error", JobStatus.FAILED)],
+)
+def test_producer_job_lifecycle_persists_in_postgresql(
+    client, database, user, registered_producer, worker_factory, outcome, field, status
+):
+    created, headers = registered_producer
+    params = {"numbers": [2, 3.5], "metadata": {"label": "тест", "optional": None}}
+    response = client.post(
+        "/producer/jobs",
+        headers={**headers, "Idempotency-Key": "lifecycle"},
+        json={"job_type": "example", "params": params, "permission_policy": "PRIVATE"},
+    )
+    assert response.status_code == 200
+    job_id = response.json()["id"]
+    assert response.json()["status"] == "PENDING"
+    with Session(database) as session:
+        stored_producer = session.get(Producer, created["id"])
+        assert stored_producer.user_id == user.id
+        assert stored_producer.secret_api_key_hash == hash_api_key(headers["X-API-Key"])
+        assert stored_producer.active is True
+        job = session.get(Job, job_id)
+        assert job.producer_id == created["id"]
+        assert job.user_id == user.id
+        assert job.params == params
+        assert job.status == JobStatus.PENDING
+
+    worker, worker_headers = worker_factory()
+    claim = client.post("/workers/claim", headers=worker_headers)
+    assert claim.status_code == 200
+    attempt_id = claim.json()["id"]
+    assert claim.json()["job_id"] == job_id
+    assert claim.json()["params"] == params
+    value = {"sum": 5.5} if outcome == "succeed" else {"code": "INVALID_PARAMS"}
+    report = client.post(
+        f"/workers/{attempt_id}/{outcome}", headers=worker_headers, json={field: value}
+    )
+    assert report.status_code == 200
+    read = client.get(f"/producer/jobs/{job_id}", headers=headers)
+    assert read.status_code == 200
+    assert read.json()["status"] == status.value
+    assert read.json()[field] == value
+    assert read.json()["attempt_ids"] == [attempt_id]
+    assert headers["X-API-Key"] not in read.text
+    with Session(database) as session:
+        job = session.get(Job, job_id)
+        attempt = session.get(JobAttempt, attempt_id)
+        assert job.status == status
+        assert getattr(job, field) == getattr(attempt, field) == value
+        assert attempt.status.value == status.value
+        assert attempt.worker_id == worker.id
+        assert job.attempts_count == attempt.attempt_number == 1
+
+
+def test_producer_job_reads_exclude_other_producer_and_direct_user_jobs(
+    client, user, user_headers, registered_producer
+):
+    _, headers = registered_producer
+    other = client.post("/producers", headers=user_headers, json={"name": "other-producer"})
+    assert other.status_code == 200
+    payload = {"job_type": "example", "params": {}, "permission_policy": "ALL"}
+    job_ids = []
+    for index, (path, credentials) in enumerate([
+        ("/producer/jobs", headers),
+        ("/producer/jobs", {"X-API-Key": other.json()["secret_api_key"]}),
+        ("/jobs/", user_headers),
+    ]):
+        response = client.post(
+            path, headers={**credentials, "Idempotency-Key": f"isolation-{index}"},
+            json=payload,
+        )
+        assert response.status_code == 200
+        job_ids.append(response.json()["id"])
+
+    listed = client.get(
+        "/producer/jobs", headers=headers,
+        params={"owner_id": user.id, "status": "PENDING", "limit": 1},
+    )
+    assert listed.status_code == 200
+    assert [job["id"] for job in listed.json()] == job_ids[:1]
+    assert client.get(
+        "/producer/jobs", headers=headers, params={"limit": 1, "offset": 1}
+    ).json() == []
+    for job_id in job_ids[1:]:
+        response = client.get(f"/producer/jobs/{job_id}", headers=headers)
+        assert response.status_code == 404
+    owner_jobs = client.get("/jobs", headers=user_headers)
+    assert owner_jobs.status_code == 200
+    assert {job["id"] for job in owner_jobs.json()} == set(job_ids)
+
+
+def test_producer_submission_replays_and_conflicts_in_postgresql(
+    client, database, user_headers, registered_producer
+):
+    created, headers = registered_producer
+    headers = {**headers, "Idempotency-Key": "submission"}
+    payload = {"job_type": "example", "params": {}, "permission_policy": "PRIVATE"}
+    first = client.post("/producer/jobs", headers=headers, json=payload)
+    assert first.status_code == 200
+    replay = client.post("/producer/jobs", headers=headers, json=payload)
+    assert replay.status_code == 200
+    assert replay.json()["id"] == first.json()["id"]
+    changed = client.post(
+        "/producer/jobs", headers=headers, json={**payload, "params": {"changed": True}}
+    )
+    assert changed.status_code == 409
+    other = client.post("/producers", headers=user_headers, json={"name": "other-producer"})
+    assert other.status_code == 200
+    for path, credentials in [
+        ("/producer/jobs", {"X-API-Key": other.json()["secret_api_key"]}),
+        ("/jobs/", user_headers),
+    ]:
+        response = client.post(
+            path, headers={**credentials, "Idempotency-Key": "submission"}, json=payload
+        )
+        assert response.status_code == 409
+    with Session(database) as session:
+        job = session.scalars(select(Job)).one()
+        assert job.id == first.json()["id"]
+        assert job.producer_id == created["id"]
+        assert job.params == {}
+
+
+@pytest.mark.parametrize("same_producer", [True, False])
+def test_concurrent_producer_submissions_preserve_idempotency_and_ownership(
+    client, database, user_headers, registered_producer, same_producer
+):
+    from main import app
+
+    created, headers = registered_producer
+    producer_ids = {created["id"]}
+    other_id = created["id"]
+    other_headers = headers
+    if not same_producer:
+        other = client.post(
+            "/producers", headers=user_headers, json={"name": "other-producer"}
+        )
+        assert other.status_code == 200
+        other_id = other.json()["id"]
+        producer_ids.add(other_id)
+        other_headers = {"X-API-Key": other.json()["secret_api_key"]}
+    key = "concurrent-producer-submission"
+    payload = {"job_type": "example", "params": {}, "permission_policy": "PRIVATE"}
+    ready = Barrier(2)
+
+    def wait_for_both_inserts(session, flush_context, instances):
+        if any(
+            isinstance(record, Job) and record.idempotency_key == key
+            for record in session.new
+        ):
+            ready.wait(timeout=10)
+
+    with TestClient(app) as other_client, ThreadPoolExecutor(max_workers=2) as executor:
+        event.listen(Session, "before_flush", wait_for_both_inserts)
+        try:
+            first = executor.submit(
+                client.post, "/producer/jobs",
+                headers={**headers, "Idempotency-Key": key}, json=payload,
+            )
+            second = executor.submit(
+                other_client.post, "/producer/jobs",
+                headers={**other_headers, "Idempotency-Key": key}, json=payload,
+            )
+            responses = [first.result(timeout=20), second.result(timeout=20)]
+        finally:
+            executor.shutdown(wait=True)
+            event.remove(Session, "before_flush", wait_for_both_inserts)
+
+    assert sorted(response.status_code for response in responses) == (
+        [200, 200] if same_producer else [200, 409]
+    )
+    saved_id = next(
+        response.json()["id"] for response in responses if response.status_code == 200
+    )
+    if same_producer:
+        assert all(response.json()["id"] == saved_id for response in responses)
+    with Session(database) as session:
+        job = session.scalars(select(Job)).one()
+        assert job.id == saved_id
+        assert job.producer_id in producer_ids
+        assert job.idempotency_key == key
+        saved_producer_id = job.producer_id
+    for producer_id, credentials, response in zip(
+        (created["id"], other_id), (headers, other_headers), responses, strict=True
+    ):
+        assert response.status_code == (200 if saved_producer_id == producer_id else 409)
+        read = client.get(f"/producer/jobs/{saved_id}", headers=credentials)
+        assert read.status_code == (200 if saved_producer_id == producer_id else 404)
+
+
+def test_producer_key_rotation_and_deactivation_preserve_jobs_in_postgresql(
+    client, database, user_headers, registered_producer
+):
+    created, headers = registered_producer
+    producer_id = created["id"]
+    payload = {"job_type": "example", "params": {}, "permission_policy": "PRIVATE"}
+    submitted = client.post(
+        "/producer/jobs", headers={**headers, "Idempotency-Key": "before-rotation"},
+        json=payload,
+    )
+    assert submitted.status_code == 200
+    job_id = submitted.json()["id"]
+    rotated = client.post(f"/producers/{producer_id}/api-key", headers=user_headers)
+    assert rotated.status_code == 200
+    new_headers = {"X-API-Key": rotated.json()["secret_api_key"]}
+    assert new_headers != headers
+    assert client.get("/producer/jobs", headers=headers).status_code == 401
+    assert client.get(f"/producer/jobs/{job_id}", headers=new_headers).status_code == 200
+    for _ in range(2):
+        deactivated = client.post(
+            f"/producers/{producer_id}/deactivate", headers=user_headers
+        )
+        assert deactivated.status_code == 200
+        assert deactivated.json()["active"] is False
+    assert client.get("/producer/jobs", headers=new_headers).status_code == 401
+    assert client.post(
+        "/producer/jobs", headers={**new_headers, "Idempotency-Key": "after-deactivation"},
+        json=payload,
+    ).status_code == 401
+    inactive_key = client.post(f"/producers/{producer_id}/api-key", headers=user_headers)
+    assert inactive_key.status_code == 200
+    assert client.get(
+        "/producer/jobs", headers={"X-API-Key": inactive_key.json()["secret_api_key"]}
+    ).status_code == 401
+    assert client.get(f"/jobs/{job_id}", headers=user_headers).status_code == 200
+    with Session(database) as session:
+        producer = session.get(Producer, producer_id)
+        assert producer.active is False
+        assert producer.secret_api_key_hash == hash_api_key(
+            inactive_key.json()["secret_api_key"]
+        )
+        assert session.scalars(select(Job)).one().producer_id == producer_id
+
+
+@pytest.mark.parametrize("has_jobs", [True, False])
+def test_producer_deletion_preserves_referenced_jobs_in_postgresql(
+    client, database, user_headers, registered_producer, has_jobs
+):
+    created, headers = registered_producer
+    if has_jobs:
+        submitted = client.post(
+            "/producer/jobs", headers={**headers, "Idempotency-Key": "referenced-job"},
+            json={"job_type": "example", "params": {}, "permission_policy": "PRIVATE"},
+        )
+        assert submitted.status_code == 200
+    deleted = client.delete(f"/producers/{created['id']}", headers=user_headers)
+    assert deleted.status_code == (409 if has_jobs else 204)
+    with Session(database) as session:
+        assert (session.get(Producer, created["id"]) is not None) == has_jobs
+        assert session.scalar(select(func.count()).select_from(Job)) == int(has_jobs)
+        if has_jobs:
+            job = session.get(Job, submitted.json()["id"])
+            assert job.producer_id == created["id"]
+            assert job.status == JobStatus.PENDING
+    assert client.get("/producer/jobs", headers=headers).status_code == (200 if has_jobs else 401)
+
+
+def test_duplicate_producer_registration_rolls_back_in_postgresql(
+    client, database, user_headers, registered_producer
+):
+    created, _ = registered_producer
+    response = client.post("/producers", headers=user_headers, json={"name": created["name"]})
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Producer name already exists"}
+    with Session(database) as session:
+        producer = session.scalars(select(Producer)).one()
+        assert producer.id == created["id"]
+        assert producer.secret_api_key_hash == hash_api_key(created["secret_api_key"])
