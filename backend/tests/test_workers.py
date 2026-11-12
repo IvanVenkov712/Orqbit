@@ -6,8 +6,9 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from models.job import Job
-from models.job_attempts import JobAttempt
+from models.job import Job, JobStatus
+from models.job_attempts import AttemptStatus, JobAttempt
+from models.job_permitted_workers import PermittedWorker
 from models.supported_types import SupportedJobType
 from models.user import User
 from models.worker import PermissionPolicy, Worker
@@ -351,3 +352,233 @@ def test_worker_registration_requires_user_authentication(client, database):
     assert response.status_code == 401
     with Session(database) as session:
         assert session.scalar(select(func.count()).select_from(Worker)) == 0
+
+
+def test_update_worker_types_replaces_capabilities_and_changes_claim_eligibility(
+    client, database, user_headers, job_factory
+):
+    created = client.post("/workers", headers=user_headers, json={
+        "name": "managed-worker",
+        "supported_types": ["example", "retained"],
+        "permission_policy": "PRIVATE",
+    }).json()
+    key = created.pop("secret_api_key")
+    with Session(database) as session:
+        removed_job = job_factory(job_type="example")
+        added_job = job_factory(job_type="new")
+        session.add_all([removed_job, added_job])
+        session.commit()
+        removed_id, added_id = removed_job.id, added_job.id
+
+    path = f"/workers/{created['id']}/supported-types"
+    for _ in range(2):
+        response = client.put(path, headers=user_headers, json={
+            "supported_types": ["retained", "new", "new"],
+        })
+        assert response.status_code == 200
+        updated = response.json()
+        assert set(updated.pop("supported_types")) == {"retained", "new"}
+        assert updated == {k: v for k, v in created.items() if k != "supported_types"}
+        assert key not in response.text
+        assert hash_api_key(key) not in response.text
+
+    with Session(database) as session:
+        worker = session.get(Worker, created["id"])
+        assert {t.type_name for t in worker.supported_types} == {"retained", "new"}
+        assert worker.secret_api_key_hash == hash_api_key(key)
+    claim = client.post("/workers/claim", headers={"X-API-Key": key})
+    assert claim.status_code == 200
+    assert claim.json()["job_id"] == added_id
+    with Session(database) as session:
+        assert session.get(Job, removed_id).status == JobStatus.PENDING
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"supported_types": []}, {"supported_types": [""]},
+    {"supported_types": [" \t"]}, {"supported_types": ["a" * 101]},
+    {"supported_types": [None]}, {"supported_types": [123]},
+])
+def test_update_worker_types_rejects_invalid_payload_without_changes(
+    client, database, claim_worker, user_headers, payload
+):
+    worker, _ = claim_worker
+    response = client.put(
+        f"/workers/{worker.id}/supported-types", headers=user_headers, json=payload,
+    )
+    assert response.status_code == 422
+    with Session(database) as session:
+        assert {t.type_name for t in session.get(Worker, worker.id).supported_types} == {
+            "example"
+        }
+
+
+def test_reissued_worker_key_replaces_old_key_and_is_not_exposed_by_reads(
+    client, database, user_headers, job_factory
+):
+    created = client.post("/workers", headers=user_headers, json={
+        "name": "managed-worker",
+        "supported_types": ["example"],
+        "permission_policy": "PRIVATE",
+    }).json()
+    worker_id = created["id"]
+    old_headers = {"X-API-Key": created.pop("secret_api_key")}
+    with Session(database) as session:
+        session.add(job_factory())
+        session.commit()
+    claim = client.post("/workers/claim", headers=old_headers)
+    assert claim.status_code == 200
+    attempt_id = claim.json()["id"]
+    response = client.post(f"/workers/{worker_id}/api-key", headers=user_headers)
+    assert response.status_code == 200
+    assert set(response.json()) == {"secret_api_key"}
+    key = response.json()["secret_api_key"]
+    assert key.startswith("oqb_")
+    assert key != old_headers["X-API-Key"]
+    with Session(database) as session:
+        stored = session.get(Worker, worker_id)
+        assert stored.secret_api_key_hash == hash_api_key(key)
+        session.add(job_factory())
+        session.commit()
+    assert client.post("/workers/claim", headers=old_headers).status_code == 401
+    new_headers = {"X-API-Key": key}
+    assert client.post("/workers/claim", headers=new_headers).status_code == 200
+    heartbeat_path = f"/workers/{attempt_id}/heartbeat"
+    assert client.post(heartbeat_path, headers=old_headers).status_code == 401
+    assert client.post(heartbeat_path, headers=new_headers).status_code == 200
+    assert client.post(
+        f"/workers/{attempt_id}/succeed", headers=new_headers, json={"result": {}},
+    ).status_code == 200
+    for path, expected in ((f"/workers/{worker_id}", created), ("/workers", [created])):
+        response = client.get(path, headers=user_headers)
+        assert response.status_code == 200
+        assert response.json() == expected
+        assert "secret_api_key" not in response.text
+        assert hash_api_key(key) not in response.text
+        assert key not in response.text
+
+
+def test_reissuing_worker_key_does_not_reactivate_inactive_worker(
+    client, database, claim_worker, user_headers
+):
+    worker, old_headers = claim_worker
+    with Session(database) as session:
+        session.get(Worker, worker.id).active = False
+        session.commit()
+    response = client.post(f"/workers/{worker.id}/api-key", headers=user_headers)
+    assert response.status_code == 200
+    key = response.json()["secret_api_key"]
+    with Session(database) as session:
+        stored = session.get(Worker, worker.id)
+        assert stored.active is False
+        assert stored.secret_api_key_hash == hash_api_key(key)
+    for headers in (old_headers, {"X-API-Key": key}):
+        assert client.post("/workers/claim", headers=headers).status_code == 401
+
+
+@pytest.mark.parametrize("method, suffix, payload", [
+    ("PUT", "/supported-types", {"supported_types": ["new"]}),
+    ("POST", "/api-key", None),
+    ("DELETE", "", None),
+])
+@pytest.mark.parametrize("access", [
+    "anonymous", "worker-key", "PRIVATE", "PERMITTED_USERS", "ALL", "missing",
+])
+def test_worker_management_requires_owner_and_does_not_change_rejected_workers(
+    client, database, user, user_headers, claim_worker, method, suffix, payload, access
+):
+    worker, worker_headers = claim_worker
+    headers = user_headers
+    worker_id = worker.id
+    with Session(database) as session:
+        stored = session.get(Worker, worker.id)
+        if access in {"PRIVATE", "PERMITTED_USERS", "ALL"}:
+            stored.user = User(
+                username="other-owner", email="other@example.com",
+                full_name="Other", hashed_password="unused",
+            )
+            stored.permission_policy = PermissionPolicy(access)
+            stored.permitted_users = [session.get(User, user.id)]
+        elif access == "missing":
+            worker_id += 10000
+        else:
+            headers = {} if access == "anonymous" else worker_headers
+        session.commit()
+        original_owner = stored.user_id
+
+    response = client.request(
+        method, f"/workers/{worker_id}{suffix}", headers=headers, json=payload,
+    )
+    expected = 401 if access in {"anonymous", "worker-key"} else 404
+    assert response.status_code == expected
+    if expected == 404:
+        assert response.json() == {"detail": "Worker not found"}
+    with Session(database) as session:
+        stored = session.get(Worker, worker.id)
+        assert stored is not None
+        assert stored.user_id == original_owner
+        assert stored.secret_api_key_hash == worker.secret_api_key_hash
+        assert {t.type_name for t in stored.supported_types} == {"example"}
+
+
+def test_delete_worker_removes_registration_types_and_visibility_grants(
+    client, database, user, user_headers, claim_worker
+):
+    worker, key_headers = claim_worker
+    with Session(database) as session:
+        session.get(Worker, worker.id).permitted_users = [session.get(User, user.id)]
+        session.commit()
+    response = client.delete(f"/workers/{worker.id}", headers=user_headers)
+    assert response.status_code == 204
+    assert response.content == b""
+    with Session(database) as session:
+        assert session.get(Worker, worker.id) is None
+        assert session.scalar(select(SupportedJobType).where(
+            SupportedJobType.worker_id == worker.id,
+        )) is None
+        assert session.scalar(select(WorkerPermittedUser).where(
+            WorkerPermittedUser.worker_id == worker.id,
+        )) is None
+    assert client.get(f"/workers/{worker.id}", headers=user_headers).status_code == 404
+    assert client.get("/workers", headers=user_headers).json() == []
+    assert client.post("/workers/claim", headers=key_headers).status_code == 401
+    assert client.delete(f"/workers/{worker.id}", headers=user_headers).status_code == 404
+
+
+@pytest.mark.parametrize("reference", ["grant", "RUNNING", "SUCCEEDED", "FAILED", "LOST"])
+def test_delete_referenced_worker_returns_conflict_and_rolls_back(
+    client, database, user, user_headers, claim_worker, job_factory, reference
+):
+    worker, key_headers = claim_worker
+    with Session(database) as session:
+        stored = session.get(Worker, worker.id)
+        stored.permitted_users = [session.get(User, user.id)]
+        job = job_factory()
+        if reference == "grant":
+            job.permitted_workers = [stored]
+        else:
+            job.status = JobStatus.FAILED if reference == "LOST" else JobStatus(reference)
+            job.attempts_count = 1
+            session.add(JobAttempt(
+                job=job, worker=stored, params={}, attempt_number=1,
+                status=AttemptStatus(reference),
+            ))
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    response = client.delete(f"/workers/{worker.id}", headers=user_headers)
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Worker is referenced by jobs or attempts"}
+    with Session(database) as session:
+        stored = session.get(Worker, worker.id)
+        assert stored.secret_api_key_hash == worker.secret_api_key_hash
+        assert {t.type_name for t in stored.supported_types} == {"example"}
+        assert [u.id for u in stored.permitted_users] == [user.id]
+        assert session.get(Job, job_id) is not None
+        if reference == "grant":
+            assert session.get(PermittedWorker, (worker.id, job_id)) is not None
+        else:
+            attempt = session.scalar(select(JobAttempt).where(JobAttempt.job_id == job_id))
+            assert attempt.worker_id == worker.id
+            assert attempt.status == AttemptStatus(reference)
+    assert client.post("/workers/claim", headers=key_headers).status_code != 401

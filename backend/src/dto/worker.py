@@ -5,6 +5,16 @@ from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 from models.worker import PermissionPolicy
 
 
+class WorkerSupportedTypesUpdate(BaseModel):
+    supported_types: set[
+        Annotated[str, Field(min_length=1, max_length=100, pattern=r"\S")]
+    ] = Field(min_length=1)
+
+
+class WorkerAPIKeyResponse(BaseModel):
+    secret_api_key: str
+
+
 class WorkerBase(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9_-]{3,16}$")
     supported_types: set[
