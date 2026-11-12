@@ -18,7 +18,7 @@ npm ci
 npm run dev
 ```
 
-**3. Open the interface.** Use Vite's printed Local URL, usually `http://localhost:5173`, and choose Create an account. Register, then sign in with your username and password. Existing accounts can sign in directly. Use Jobs to submit and inspect work and Workers to register worker credentials. Run an independent worker to execute submitted jobs. Reloading the page preserves login until the token expires or you sign out.
+**3. Open the interface.** Use Vite's printed Local URL, usually `http://localhost:5173`, and choose Create an account. Register, then sign in with your username and password. Existing accounts can sign in directly. Use Jobs to submit and inspect work, Workers to register worker credentials, and Producers to manage producer credentials. Run independent applications to submit/execute work outside the browser. Reloading the page preserves login until the token expires or you sign out.
 
 Keep both terminals running while using the application. Press `Ctrl+C` in each to stop its development server; your PostgreSQL database retains accounts and jobs.
 
@@ -50,6 +50,9 @@ src/
   JobsPage.tsx              Job browsing
   JobDetailsPage.tsx        Job details and attempt history
   WorkersPage.tsx           Worker browsing, registration, and details
+  ProducersPage.tsx         Producer search, registration, details, and management
+  ListControls.tsx          Shared filtering, sorting, and current-page grouping
+  Icon.tsx                  Application icons
   ParameterEditor.tsx       Nested JSON parameter editing
   index.css                 Global styles and design variables
   App.module.css            Shared application styles
@@ -62,23 +65,28 @@ Follow these files and patterns when adding behavior. Extract shared components 
 
 ## Screens and navigation
 
-Use a simple top navigation bar with Jobs, Workers, and the current-user menu. Jobs is the default authenticated destination. Client routes below are distinct from backend endpoints.
+The current layout has sidebar navigation for Jobs, Workers, and Producers, plus the signed-in user's identity and sign-out action. Jobs is the default authenticated destination. At narrow widths, CSS adapts the sidebar and collection layouts. Client routes below are distinct from backend endpoints.
 
 | Client route | Screen and behavior |
 | --- | --- |
 | `/login` | Login form and registration link |
 | `/register` | Account registration, followed by login |
-| `/jobs` | Your jobs, status views, pagination, Submit job action |
+| `/jobs` | Accessible jobs from all owners, status/lost-attempt views, filters, sorting, grouping, and pagination; defaults to Pending |
 | `/jobs/new` | Type, JSON parameters, and access policy |
 | `/jobs/:jobId` | Status and identifiers, parameters, result/error, attempt history |
 | `/jobs/:jobId/attempts` | Dedicated attempt-history view |
-| `/workers` | Your workers, type filter, pagination, registration action |
+| `/workers` | Accessible workers from all owners, type/owner/active/date filters, sorting, grouping, pagination, and registration |
 | `/workers/new` | Worker registration and one-time API-key display |
 | `/workers/:workerId` | Worker metadata, supported types, and visibility policy |
+| `/producers` | Your producers, partial/exact name or ID search, and page-size selection |
+| `/producers/new` | Producer registration and one-time API-key display |
+| `/producers/:producerId` | Producer metadata, key reissue, deactivation, and deletion when unreferenced |
 
-Give pages one clear primary action. Use real links for navigation and buttons for actions. Put status and identifying information first on job details, followed by JSON panels and attempt history. Keep worker registration and its one-time API-key display on the registration route.
+Give pages one clear primary action. Use real links for navigation and buttons for actions. Put status and identifying information first on job details, followed by JSON panels and attempt history. Keep returned API keys in local state on their immediate registration/reissue screen.
 
 Preserve filters and pagination through query parameters, validate them before API requests, and reset the offset when filters change. Lists and attempts return arrays with `limit`/`offset`, not total counts. Use Previous/Next controls; a full page may require one more request to discover the end. Do not infer global totals from a page of accessible records.
+
+Jobs and Workers browse all accessible owners unless **Owner username** is supplied. Filters and sorting apply on the server before pagination; collapsible groups and their counts apply only to the fetched page. Removing a filter or clearing filters preserves unrelated URL state. Job list requests default to lifecycle sorting in the interface, while the API itself defaults to descending ID when no sort is supplied.
 
 ## API integration and session behavior
 
@@ -94,10 +102,14 @@ Use the current unversioned contract in the [API reference](../../docs/api.md); 
 | Read attempts | `GET /api/jobs/{id}/attempts` |
 | Register/list workers | `POST /api/workers`, `GET /api/workers` |
 | Read worker | `GET /api/workers/{id}` |
+| Register/list producers | `POST /api/producers`, `GET /api/producers` |
+| Read producer | `GET /api/producers/{id}`, `GET /api/producers/by-name/{name}` |
+| Reissue producer key | `POST /api/producers/{id}/api-key` |
+| Deactivate/delete producer | `POST /api/producers/{id}/deactivate`, `DELETE /api/producers/{id}` |
 
-Use `Authorization: Bearer <access_token>` for user-protected requests. Worker `X-API-Key` credentials belong to the independent worker. The dashboard registers and inspects workers; it does not claim work or report their outcomes.
+Use `Authorization: Bearer <access_token>` for user-protected requests, including worker/producer registration management. Worker and producer `X-API-Key` credentials belong to their independent applications. The dashboard does not claim work, report worker outcomes, or use producer keys for background submission.
 
-The shared client should support both form and JSON requests, check HTTP status, and translate string `detail` errors and FastAPI field-validation arrays into useful messages. Show network failures separately from invalid input. Missing and inaccessible records both return 404; do not reveal or infer which case applies. Current creation routes return 200.
+The shared client supports both form and JSON requests, checks HTTP status, and translates string `detail` errors and FastAPI field-validation arrays into useful messages. It handles bodyless 204 responses for deletion. Show network failures separately from invalid input. Missing and inaccessible records both return 404; do not reveal or infer which case applies. Current creation routes return 200.
 
 Persist only the access token in local storage, keeping passwords and current-user details out of browser persistence. Page reloads preserve login: validate the saved token's expiry, then load `/users/me/` before opening protected screens. Remove the saved token on expiry, logout, or authentication rejection; preserve it on network/server failures and offer a restoration retry. There is no token-refresh endpoint or server-side logout operation. On session expiry, cancel user-specific requests and clear cached records. Keep caches isolated between users. Registration returns user metadata, so it does not itself establish a logged-in session.
 
@@ -105,7 +117,9 @@ Persist only the access token in local storage, keeping passwords and current-us
 
 Validate that parameters parse as a JSON object; arrays, primitives, and null are invalid top-level inputs. Start with `PRIVATE` policy. Generate a submission key, for example using `crypto.randomUUID()`, once for the intended request. Retain its payload and key when retrying an uncertain response. A fresh submission or deliberately revised request needs a new key. Do not automatically retry a changed payload with the old key, or create a new key merely because the response was lost.
 
-Worker registration requires a name, nonempty supported types, and visibility policy. Show the returned `secret_api_key` only in the immediate creation result, with a copy action and instructions to save it. Avoid storing it in browser persistence, URLs, logs, or the long-lived query cache. Later reads cannot retrieve it, and the current API cannot rotate it.
+Worker registration requires a name, nonempty supported types, and visibility policy. Producer registration requires a name. Show the returned `secret_api_key` only in the immediate creation/reissue result, with a copy action and instructions to save it. Avoid storing it in browser persistence, URLs, logs, or the long-lived query cache. Later reads cannot retrieve it. The backend supports owner-authorized key reissue for both registrations; the browser currently exposes reissue only for producers.
+
+Producer deactivation preserves jobs and disables producer-key authentication. Reissue does not reactivate credentials. Deletion of a producer referenced by jobs returns 409. The interface provides no producer reactivation action because the API has no corresponding endpoint.
 
 Show only the user/worker ID inputs relevant to the selected policy and explain their effect. A worker claim grant does not automatically grant its owner user-facing job access. Worker visibility and job permissions are distinct. Use the API's user-discovery endpoints if adding searchable grant pickers. Consult the API reference for policy values and validation rules.
 
@@ -119,30 +133,30 @@ Configure query freshness, interval polling, and retries deliberately. Avoid ret
 
 ## Visual design
 
-Use a calm, technical dashboard with light surfaces, navy text, teal actions, compact tables, and restrained decoration. Use the supplied Orqbit icon for application branding and the favicon. The palette follows its navy and aqua colors, with darker teal for readable controls. A dark developer-console theme or a denser industrial style could be considered later; begin with the light operational style.
+The implemented dashboard uses light surfaces, dark text, teal actions, compact tables, and the supplied Orqbit icon for branding and the favicon. Continue the existing sidebar, collection toolbar, status tabs, cards, and responsive layouts when adding screens. Dark mode is deferred.
 
 ### Palette and typography
 
-Define CSS custom properties in `index.css`, then use CSS Modules beside components for scoped styles. Plain global CSS should cover base elements and tokens. A CSS framework or large component library is optional future work, not a prerequisite.
+CSS custom properties in `index.css` define the global palette, fonts, and spacing; `App.module.css` contains shared scoped application styles. Reuse those values and patterns. A CSS framework or large component library is not required.
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `--color-background` | `#F5F8FC` | Page background |
+| `--color-background` | `#F7F9FB` | Page background |
 | `--color-surface` | `#FFFFFF` | Panels and inputs |
-| `--color-text` | `#101A35` | Primary text |
-| `--color-text-secondary` | `#4C5C75` | Supporting text |
-| `--color-divider` | `#DCE5EF` | Subtle content separators |
-| `--color-primary` | `#0F6F78` | Main actions and focus indication |
-| `--color-input-border` | `#64758B` | Visible control boundaries |
+| `--color-text` | `#202B3C` | Primary text |
+| `--color-text-secondary` | `#647185` | Supporting text |
+| `--color-divider` | `#E4E9EF` | Subtle content separators |
+| `--color-primary` | `#087E78` | Main actions |
+| `--color-input-border` | `#9AA7B6` | Control boundaries |
 
-Use a system sans-serif stack for normal text and a system monospace stack for job types, IDs, and JSON. Start with 16px body text, 14px table text, and 24-28px page headings. Use spacing steps of 4, 8, 12, 16, 24, and 32px, and modest 6-8px corner radii. Centralize these values as variables rather than repeating arbitrary values.
+The existing font stacks start with Segoe UI for normal text and Cascadia Code for monospace. The root font is 14px/1.55; component headings and table sizes are defined in the stylesheets. Spacing tokens use 4, 8, 12, 16, 24, and 32px, and the shared radius token is 10px. Treat the stylesheets as the source of truth for exact values.
 
 ### Components and interaction
 
 - Tables use clear column headings, horizontal separators, subtle row hover, and explicit detail links. Preserve readable columns at narrow widths with contained scrolling where necessary.
-- Forms use labels above controls, concise help text, inline validation errors, and a visible submitting state. Start JSON entry with a normal textarea; a code editor is not required.
+- Forms use labels above controls, concise help text, inline validation errors, and a visible submitting state. `ParameterEditor.tsx` builds nested JSON objects/lists from typed inputs; a separate code editor is not required.
 - Primary buttons use solid teal with contrasting text. Secondary actions use outlined or plain treatments. Keep destructive styling reserved for actual destructive operations when supported.
-- JSON panels use a pale background, preserved indentation, monospace text, scrolling for large content, and a copy action with feedback. Render JSON as text rather than injecting HTML.
+- JSON panels use a pale background, preserved indentation, monospace text, and wrapping for long content. They currently render selectable text, without a dedicated copy button. Render JSON as text rather than injecting HTML.
 - Status badges include text: slate for `PENDING`, blue for `RUNNING`, green for `SUCCEEDED`, and red for `FAILED`. Label `LOST` as an expired attempt lease, without treating it as proof that the worker process stopped.
 - Use visible keyboard focus, associated form labels, semantic tables, and accessible copy/error feedback. Color must be accompanied by text or another cue.
 - Keep hover transitions brief and honor reduced-motion preferences. Background polling should not flash the page, move focus, or repeatedly announce unchanged content.
@@ -155,7 +169,8 @@ Check actual color combinations against WCAG: normal text needs 4.5:1 contrast a
 - Attempt history includes worker attribution and creation/update timestamps. `updated_at` is not a dedicated finished timestamp. Display timezone information clearly when formatting timestamps.
 - Worker `active` indicates authentication eligibility, not online status. Attempt heartbeats do not provide a separate worker-process liveness signal.
 - Recovery schedules retries for lost attempts while budget remains. A worker-reported failure is terminal. Use [recovery and bounded retries](../../docs/api.md#recovery-and-bounded-retries) when presenting these states.
-- There are no update/delete, cancellation, account-management, token-refresh, or key-rotation endpoints. Add their controls only when backend contracts exist.
+- Worker supported-type updates, key reissue, and deletion are implemented API operations, but currently lack browser controls. Producer management includes key reissue, deactivation, and safe deletion in both API and UI.
+- Job update/delete, cancellation, manual replay, account management, token refresh, worker deactivation, and producer reactivation have no current endpoints. Add their controls only when backend contracts exist.
 - Client route guards improve navigation; authorization remains enforced by the API.
 
 ## Verification and working practices

@@ -45,7 +45,7 @@ Using the same user, submit `POST /jobs/` with a fresh `Idempotency-Key`:
 
 With API settings `LEASE_SECONDS=120`, `LEASE_EXTENSION_SECONDS=60`, and the default `EXECUTION_DELAY=150`:
 
-The worker waits 150 seconds, then its success report is rejected with HTTP 400 because the lease expired. It logs the status and exits with code 1, without retrying or sending a failure report. To see a successful short task, set `EXECUTION_DELAY=5` and submit a new job.
+The worker waits 150 seconds, then its success report is rejected. It returns HTTP 400 if the expired attempt is still stored as `RUNNING`, or 409 if recovery has already marked it `LOST` (the usual result with recovery running at its default interval). The worker logs the status and exits with code 1, without retrying or sending a failure report. To see a successful short task, set `EXECUTION_DELAY=5` and submit a new job.
 
 Rejecting an expired report does not itself update the stored job or attempt status.
 

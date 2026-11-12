@@ -10,10 +10,10 @@ backend/
     database.py            PostgreSQL engine and session dependency
     health.py              Read-only database/schema readiness checks
     recovery.py            Separately runnable expiry recovery and retry scheduling
-    models/                Jobs, users, workers, permissions, attempts, and timestamps
+    models/                Jobs, users, workers, producers, permissions, and attempts
     dto/                   Pydantic requests and responses
     services/              Authentication, access rules, submission, and job lifecycle operations
-    api/routers/           Auth, user, job, worker, claim/outcome, and health routes
+    api/routers/           Auth, user, job, worker/producer management, execution, and health
   Dockerfile               Python 3.13 API/migration image with locked runtime dependencies
   .dockerignore            Allowlist of files needed to build the image
   .env.example             Local application configuration template
@@ -26,8 +26,14 @@ backend/
 docker-compose.yml         PostgreSQL, migration, API, recovery, and frontend services
 .env.compose.example       Local container configuration template
 .github/workflows/ci.yml    Checks on pushes and pull requests
-docs/                      Current status and proposed implementation design
+frontend/                  React/TypeScript browser interface with its own npm setup
+examples/workers/          Independently installed worker applications and a foundation template
+examples/producers/        Independently installed CLI and console producer applications
+tutorials/                 Guided setup and worker implementation walkthroughs
+docs/                      Current architecture, API/setup guides, and remaining work
 ```
+
+See [architecture](architecture.md) for component boundaries, transaction ownership, and recommended worker/producer application structures. Lifecycle services currently use SQLAlchemy directly; list/read routes also contain queries. There is no separate repository layer.
 
 ## Running the API locally
 
@@ -56,6 +62,7 @@ Edit `backend/.env` before continuing:
 - Replace `SECRET_KEY=replace_with_secret_key` with the generated 64-character lowercase hexadecimal value. Keep an existing valid key when reusing your configuration.
 - Retain the other example settings: `LEASE_SECONDS=120`, `LEASE_EXTENSION_SECONDS=60`, `ALGORITHM=HS256`, and `ACCESS_TOKEN_EXPIRE_MINUTES=30`. The three timing settings must be positive. `LEASE_SECONDS` sets the initial attempt lease; `LEASE_EXTENSION_SECONDS` sets the window from the current database time on renewal. Rename the former `PROTRACTION_SECONDS` setting in existing environment files; no compatibility alias is provided.
 - `MAX_ATTEMPTS` sets the total attempts for each new job, including the first. Keep 1 to disable retries, or choose 2-5 to retry lost attempts. Restart local processes after changing configuration; existing jobs retain their saved budget. See [retry semantics](api.md#recovery-and-bounded-retries).
+- Application database connections default to `DATABASE_STATEMENT_TIMEOUT_MS=5000` and `DATABASE_LOCK_TIMEOUT_MS=1000`. They can be overridden in the local process environment or `backend/.env`; both must be positive integer milliseconds. These bound database operations, not complete requests or worker runtimes. See [database timeouts and retries](api.md#database-timeouts-and-retries).
 
 The real environment files are ignored by Git.
 
@@ -141,7 +148,9 @@ The script does not create the database, apply migrations, or execute jobs.
 
 ## Job coordination
 
-Clients submit with a required creator-scoped `Idempotency-Key`; matching retries return the existing job, and changed content returns 409. Workers authenticate with `X-API-Key` and claim without a request body; their supported job types are registered on the server. A claim returns an execution attempt, and the worker reports its outcome by that attempt's ID. Clients can read job status, result/error, and attempt IDs, then fetch paginated attempt details from `GET /jobs/{job_id}/attempts`. The [example worker guide](../examples/workers/add_numbers/README.md) walks through this flow.
+Users submit to `POST /jobs/` with a bearer token; registered producers submit to `POST /producer/jobs` using their own `X-API-Key`. Both require a creator-scoped `Idempotency-Key`; matching retries from the same submitter return the existing job, while changed content or another producer's/direct user's reserved key returns 409. The namespace is shared per owning user, not per producer. Producer reads are limited to that producer's submissions. The owner's user token can read those jobs and fetch paginated attempt details from `GET /jobs/{job_id}/attempts`.
+
+Workers authenticate with their own `X-API-Key` and claim without a request body; their supported job types are registered on the server. A claim returns an execution attempt, and the worker reports its outcome by that attempt's ID. User-facing details include job status, result/error, and attempt IDs. The [example worker guide](../examples/workers/add_numbers/README.md) walks through this flow; the [CLI producer](../examples/producers/add_numbers_cli/README.md) and [console producer](../examples/producers/add_numbers_console/README.md) show independent submission applications.
 
 Claims use a PostgreSQL transaction with `FOR UPDATE SKIP LOCKED`; claiming creates an attempt with an initial lease and marks the job running in that transaction. Heartbeats and outcome reports lock the attempt and check worker ownership, running status, and lease expiry using PostgreSQL `clock_timestamp()` after locking. Heartbeat renewal cannot shorten the current deadline. An accepted outcome updates job and attempt together; an exact replay remains supported after the lease deadline. See the [API reference](api.md#attempt-heartbeats-and-leases) for the protocol and error responses. These operations coordinate work; the API does not execute worker handlers.
 
@@ -166,6 +175,8 @@ Migration `43dcc043466c` adds the required timezone-aware `job_attempts.lease_ex
 
 Migration `a7d77c0723e0` adds `jobs.max_attempts`, `attempts_count`, and `available_at`. It locks jobs and attempts while backfilling `attempts_count` from the highest saved attempt number (0 without attempts), then sets `max_attempts` to `GREATEST(1, attempts_count)`. Existing jobs receive no extra retry budget, regardless of current settings. The counters become non-nullable and receive checks for a positive limit and a count between 0 and that limit. `available_at` uses PostgreSQL `clock_timestamp()` for existing and new rows. Job and attempt history remains intact; downgrade removes the checks and these three columns.
 
+Migration `c36ecd2753e2` creates `producers`, including unique names/key hashes and an owner foreign key, then adds nullable `jobs.producer_id` with the `fk_jobs_producer_id` foreign key. Existing jobs retain their values with `producer_id=NULL`; no producer attribution is inferred. Downgrade removes the link and producer table, losing registration data and attribution while preserving jobs. Apply `alembic upgrade head` for producer routes and for readiness to match the current models.
+
 ## PostgreSQL integration tests
 
 See the [testing guide](testing.md) for database setup, commands, coverage, and CI checks.
@@ -186,8 +197,9 @@ The services are:
 | `migrate` | Uses the API image, waits for a healthy database, runs `alembic upgrade head`, and exits |
 | `api` | Uses the same image, waits for a healthy database and successful migrations, and runs Uvicorn on port 8000 without reload |
 | `recovery` | Uses the same image and settings, waits for the database and migrations, and runs `python -m recovery` with automatic process restart |
+| `frontend` | Builds the React application and serves it with Nginx on host port 8080, proxying `/api/` to the API; started separately from the API-only commands below |
 
-The host API port defaults to `127.0.0.1:8000`; set `API_PORT` to change it. The database port is not published to the host. Startup gating uses Compose's `service_healthy` and `service_completed_successfully` conditions ([Docker documentation](https://docs.docker.com/compose/how-tos/startup-order/)). The shared image receives application configuration at runtime through environment variables.
+The host API port defaults to `127.0.0.1:8000`; set `API_PORT` to change it. The database port is not published to the host. API/recovery startup gating uses Compose's `service_healthy` and `service_completed_successfully` conditions. The frontend declares a basic dependency on the API. The shared backend image receives application configuration at runtime through environment variables. The current Compose environment mapping does not forward `DATABASE_STATEMENT_TIMEOUT_MS` or `DATABASE_LOCK_TIMEOUT_MS`; the application defaults apply unless those variables are explicitly passed to the containers through a Compose override. Merely adding them to `.env.compose` does not pass them through.
 
 From the repository root:
 

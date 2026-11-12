@@ -1,10 +1,12 @@
 # Outstanding acceptance requirements
 
+The current system already implements atomic claims, submission/outcome replay, per-attempt leases, recovery with bounded lost-attempt retries, owner-authorized worker/producer key reissue, producer deactivation, producer schema migrations, and statement/lock timeouts with safe database-error responses. Existing backend tests exercise those behaviors, including rollback after timeouts. The requirements below concern additional capabilities and operational evidence; see [architecture](architecture.md) for the implemented design.
+
 ## Worker coordination and retries
 
 | Remaining requirement | Acceptance evidence to add |
 | --- | --- |
-| Process-instance identity and credential management | Distinguish processes sharing a registered worker; reject superseded instances and rotated/revoked credentials |
+| Process-instance identity and worker revocation | Distinguish processes sharing a registered worker, reject superseded instances, and define public worker deactivation beyond existing key reissue |
 | Worker-process liveness | Detect an inactive process without renewing all of its attempts |
 | Hard execution limits | A handler cannot renew past its attempt deadline; timeout classification and retry-budget effects are explicit |
 | Retryable worker failures | Transient errors receive bounded delayed retries; permanent errors stop; repeated reports cannot schedule duplicate work |
@@ -18,7 +20,6 @@
 | --- | --- |
 | Live failure recovery | Worker kills, lost responses, network interruptions, and service restarts preserve committed work and bounded retry behavior |
 | Recovery visibility | Recovery-process liveness, scan lag, and oldest expired lease are measurable and have alerts and an operator response |
-| Query timeouts and failure responses | Lock waits, query timeouts, and database failures have defined responses and leave transactions rolled back |
 | Resource limits | Explicit payload/result/error sizes, request rates, queue quotas, and overload behavior are tested |
 | Performance targets | Representative throughput and p95/p99 submit/claim latency targets are measured against agreed workload sizes |
 | Availability objectives | Define an availability SLO, recovery-point objective, and recovery-time objective; exercise all process and database dependencies |

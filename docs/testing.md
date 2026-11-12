@@ -28,7 +28,7 @@ Tests require an explicit `TEST_DATABASE_URL` using the psycopg driver and a dat
 
 ### Adding focused coverage
 
-Add or update tests for each requested behavior using the existing fixtures. Verify observable API responses and persisted state through separate sessions. Exercise PostgreSQL-specific locking with overlapping transactions, events, and bounded waits; use controlled timestamps instead of sleeps. Keep worker tests in their own application directories.
+Add or update tests for each requested behavior using the existing fixtures. Verify observable API responses and persisted state through separate sessions. Exercise PostgreSQL-specific locking with overlapping transactions, events, and bounded waits; use controlled timestamps instead of sleeps. Keep worker and producer tests in their own application directories.
 
 Real PostgreSQL checks JSONB, enums, transactions, and schema behavior that SQLite cannot faithfully verify. Temporary schemas and per-test cleanup prevent one case's data from affecting another; real commits and separate sessions ensure assertions do not rely only on objects cached in memory.
 
@@ -41,9 +41,26 @@ uv run --locked python -m compileall -q src migrations tests
 
 Repeat the configured checks for each change. CI uses a separate PostgreSQL test service and a separate Compose smoke job; use the same locked dependencies and test setup locally.
 
+Existing backend coverage includes submission and permissions, concurrent claims, outcome replay, leases/recovery/retries, worker management, producer authentication and scoped jobs, key reissue/deactivation, the producer migration round trip, and rollback after database statement/lock timeouts. Producer tests include both mocked-session API cases and PostgreSQL-backed persistence/concurrency cases; mocked cases alone do not verify database guarantees.
+
+## Independent applications and frontend
+
+Run each runnable worker's and producer's checks from its own directory, using its own virtual environment:
+
+```powershell
+uv sync --locked
+uv run --locked pytest -q
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+```
+
+These application tests mock HTTP and, where needed, clocks; they do not need a running API or PostgreSQL. The `worker_foundation` directory is an incomplete template, not another runnable/tested worker. Refer to each application's README for its input and lifecycle cases.
+
+From `frontend/`, use `npm ci`, `npm test`, `npm run lint`, and `npm run build` for the existing Vitest/Testing Library, Oxlint, and TypeScript/Vite checks. Browser tests mock API responses; they do not establish backend authorization or concurrency guarantees. The current GitHub Actions workflow runs backend checks and the Compose smoke job, not frontend or independent-application checks.
+
 ## Docker Compose smoke check
 
-An automated smoke check runs the complete flow in its own randomly named project with generated test credentials, a generated JWT signing key, and a temporary database volume. It builds the image, waits for readiness, checks that the runtime excludes secrets and development tools, registers and logs in a user, creates/reads a private job using its bearer token, reruns migrations, stops PostgreSQL to verify live=200/ready=503, starts PostgreSQL again to verify recovery, recreates the containers while retaining the volume, and reads the same job. It removes only its own containers and volume afterward. Run it from the repository root (`cd ..` if you are in `backend/`):
+An automated backend smoke check runs in its own randomly named project with generated test credentials, a generated JWT signing key, and a temporary database volume. It builds the image, waits for readiness, checks that the runtime excludes secrets and development tools, registers and logs in a user, creates/reads a private job using its bearer token, reruns migrations, stops PostgreSQL to verify live=200/ready=503, starts PostgreSQL again to verify reconnection, verifies abandoned-attempt recovery and late-report rejection, recreates the containers while retaining the volume, and reads the same job. It removes only its own containers and volume afterward. It does not run the browser or an independent worker/producer application. Run it from the repository root (`cd ..` if you are in `backend/`):
 
 ```powershell
 python backend/tests/compose_smoke.py

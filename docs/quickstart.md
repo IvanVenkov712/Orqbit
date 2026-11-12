@@ -62,7 +62,7 @@ An existing database with legacy jobs may need preparation before migration; see
 
 ## 3. Register and log in
 
-Choose a password containing 6?20 characters, using only ASCII letters, digits, and `@`, `$`, `#`, `%`. Include at least one uppercase letter, lowercase letter, digit, and one of those symbols.
+Choose a password containing 6–20 characters, using only ASCII letters, digits, and `@`, `$`, `#`, `%`. Include at least one uppercase letter, lowercase letter, digit, and one of those symbols.
 
 ```powershell
 $password = Read-Host "Choose a demo password matching the rules above"

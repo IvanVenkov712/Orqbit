@@ -40,7 +40,7 @@ You have given a worker permission to connect to Orqbit. You still need to start
 
 An **Active** credential/registration status means its credentials are enabled. It does not tell you whether the worker program is running. **Private** visibility controls who can see its registration details; which jobs it can process is controlled by each job's access policy and type.
 
-If you lose the key, register a replacement worker with a new name and save the new key. The current interface cannot display an old key or rotate it.
+If you lose the key, the owner can replace it through `POST /workers/{worker_id}/api-key` using a user bearer token; see [worker management](../../docs/api.md#worker-management). The old key then stops authenticating, so update the worker's `.env` and restart it. The current browser interface cannot display an old key or reissue worker keys. Alternatively, register a replacement worker with a new name and save its key.
 
 **Ready:** you can view your worker's details and have saved its API key.
 

@@ -1,15 +1,16 @@
 # Backend roadmap
 
-## 1. API and database failure handling
+Implemented foundations include safe claiming, submission/outcome replay, leases and recovery, bounded lost-attempt retries, worker key reissue/type management, producer registration and job APIs, the producer migration, and bounded database operations with safe failure responses. See [architecture](architecture.md) and [API](api.md) for current behavior. The items below remain to be done.
 
-- Define query timeouts for application operations and test rollback and responses after lock waits or timeouts.
-- Define consistent responses for temporary database failures and unexpected storage errors without exposing SQL, credentials, or stack traces.
+## 1. Database readiness and operational tuning
+
+- Tune the implemented statement/lock timeouts and pool limits against measured workloads.
 - Decide whether readiness should detect missing constraints and indexes.
 
 ## 2. Worker identity and execution bounds
 
 - Separate worker process instances from registered credentials and reject updates from superseded instances.
-- Add authorized API-key rotation and revocation management.
+- Define worker deactivation/revocation and process replacement behavior beyond the implemented owner-authorized key reissue. Producer deactivation is already available; worker deactivation has no public endpoint.
 - Add worker-process liveness reporting without extending attempt leases implicitly.
 - Define hard attempt runtimes and optional overall job deadlines; prevent heartbeats from extending ownership past those limits.
 - Add graceful worker draining with a bounded period for finishing and reporting active work.

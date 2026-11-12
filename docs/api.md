@@ -1,6 +1,6 @@
 # API reference
 
-This page describes the current unversioned prototype. `/docs` and `/openapi.json` expose the generated schema while the API runs. Successful routes return HTTP 200, including registration, worker creation, and job submission. The `/v1` contract at the end is a future proposal.
+This page describes the current unversioned prototype. `/docs` and `/openapi.json` expose the generated schema while the API runs. Successful reads, registration, key reissue, and job operations return HTTP 200; successful worker/producer deletion returns 204 without a body. The `/v1` contract at the end is a future proposal.
 
 ## Authentication and users
 
@@ -12,11 +12,11 @@ This page describes the current unversioned prototype. `/docs` and `/openapi.jso
 | GET | `/users` | User bearer token | Optional `query`, `limit`, `offset`; returns active users' public profiles |
 | GET | `/users/{user_id}` | User bearer token | Returns an active user's public profile, or 404 |
 
-User requests use `Authorization: Bearer <access_token>`. Worker claim, heartbeat, and outcome requests use `X-API-Key: <worker-api-key>`. Creating or viewing workers uses a user token. No credentials are needed for health routes.
+User requests use `Authorization: Bearer <access_token>`. Worker claim, heartbeat, and outcome requests use `X-API-Key: <worker-api-key>`. Producer job requests use `X-API-Key: <producer-api-key>`. Managing worker/producer registrations uses a user token. These API keys are separate credentials and cannot substitute for each other. No credentials are needed for health routes.
 
-Usernames and worker names contain 3?16 ASCII letters, digits, underscores, or hyphens. Email addresses are validated. Registration passwords contain 6?20 ASCII letters/digits or `@`, `$`, `#`, `%`, including at least one uppercase letter, lowercase letter, digit, and one of those symbols. User metadata contains `id`, `username`, `email`, `full_name`, `active`, and `role`; password hashes are not returned.
+Usernames, worker names, and producer names contain 3–16 ASCII letters, digits, underscores, or hyphens. Email addresses are validated. Registration passwords contain 6–20 ASCII letters/digits or `@`, `$`, `#`, `%`, including at least one uppercase letter, lowercase letter, digit, and one of those symbols. User metadata contains `id`, `username`, `email`, `full_name`, `active`, and `role`; password hashes are not returned.
 
-Passwords are hashed with Argon2. Tokens use the configured signing key, algorithm, and expiry. Inactive users cannot log in or access user-protected routes. Worker authentication checks its API-key hash and the worker's active flag. The current API has no account-management, token-refresh, or key-rotation endpoints.
+Passwords are hashed with Argon2. Tokens use the configured signing key, algorithm, and expiry. Inactive users cannot log in or access user-protected routes. Worker and producer authentication each check the corresponding API-key hash and registration's active flag. Owners can reissue worker and producer keys, and deactivate producers, through the management routes below. Account management, token refresh, worker deactivation, and producer reactivation endpoints are not implemented.
 
 ### User discovery
 
@@ -46,7 +46,7 @@ Both single-producer GET routes include active and inactive registrations owned 
 
 Deactivation preserves published jobs and the stored key hash, but the producer authentication dependency rejects inactive producers. Repeated deactivation succeeds. Reissuing an inactive producer's key does not reactivate it. A producer with jobs must be deactivated rather than deleted; the deletion conflict is 409, `Producer is referenced by jobs`.
 
-The producer schema migration is still pending. These routes require the `producers` table and `jobs.producer_id` column from the current models; the shipped Alembic revisions do not yet create them.
+Migration `c36ecd2753e2` creates the `producers` table and nullable `jobs.producer_id` foreign key. Apply the shipped migrations with `alembic upgrade head` before using these routes. Existing jobs retain their data and have no producer attribution; see [migration notes](development.md#existing-databases).
 
 ## Producer jobs
 
@@ -64,7 +64,7 @@ Listing accepts `owner_id`, `owner_username`, `status`, `job_type`, `attempt_sta
 
 Submission keys retain the existing database scope `(user_id, idempotency_key)`. A matching retry from the same producer returns its existing job; changed content or a key already used by another producer or directly by that user returns 409, `Conflicting create requests`. The user submission route likewise rejects replaying a producer's key. Concurrent uniqueness conflicts use the same ownership check. Independent per-producer key namespaces would require a schema migration and are not implemented here. Invalid permission IDs return 422 as on user submission.
 
-These routes share the pending producer schema migration described above.
+The producer key does not grant access to `/jobs/{job_id}/attempts`; that route requires a user bearer token with job-read access. `JobRead` currently omits `producer_id`, even for producer submissions.
 
 ## Jobs
 
@@ -75,13 +75,13 @@ These routes share the pending producer schema migration described above.
 | GET | `/jobs/{job_id}` | Job ID | Accessible job, or 404 |
 | GET | `/jobs/{job_id}/attempts` | Job ID; optional `limit`, `offset` | Execution attempts, highest attempt number first |
 
-All job routes require a user token. Job types are 1?100 characters and must contain a non-whitespace character. Types are matched as stored; they are not trimmed or normalized. `params` must be a JSON object and may contain nested JSON values. The creator comes from authentication, not a request-supplied user ID.
+All job routes in this section require a user token. Job types are 1–100 characters and must contain a non-whitespace character. Types are matched as stored; they are not trimmed or normalized. `params` must be a JSON object and may contain nested JSON values. The creator comes from authentication, not a request-supplied user ID. Job-type-specific input validation belongs to the independent worker; the API does not maintain parameter schemas for each type.
 
 Submission also requires an `Idempotency-Key` header containing 1–100 characters and at least one non-whitespace character. Generate a key for each intended submission and reuse it with the same request when retrying. Keys are scoped to the authenticated creator: a matching replay returns the existing job in its current state; changed content returns 409, `Conflicting create requests`. JSON object key order and permission-list order/duplicates do not affect matching; other array ordering remains significant. Keys remain reserved while the job exists.
 
 Migration `4610066358ca` adds the required columns and uniqueness on `(user_id, idempotency_key)`. It preserves existing jobs by assigning each a synthetic key `legacy-job:<job_id>` and the fingerprint marker `legacy` before making both columns non-nullable. Original submission keys cannot be recovered, so historical jobs do not support submission replay. Future submissions must supply their own keys; the columns have no defaults.
 
-`GET /jobs` defaults to `limit=50`, `offset=0`; limit must be 1?100 and offset nonnegative. Filters are combined with permission checks. The optional `sort=status_updated` orders by lifecycle status (`PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`), then descending update time and ID. `status_desc` reverses lifecycle status order while retaining descending update time and ID within each status. `created_asc`/`created_desc`, `updated_asc`/`updated_desc`, `type_asc`/`type_desc`, and `owner_asc`/`owner_desc` sort by creation time, update time, exact job type, and owner username respectively. These column sorts use descending ID to break ties. Unsupported sort values return 422; omitting `sort` preserves newest-ID-first ordering.
+`GET /jobs` defaults to `limit=50`, `offset=0`; limit must be 1–100 and offset nonnegative. Filters are combined with permission checks. The optional `sort=status_updated` orders by lifecycle status (`PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`), then descending update time and ID. `status_desc` reverses lifecycle status order while retaining descending update time and ID within each status. `created_asc`/`created_desc`, `updated_asc`/`updated_desc`, `type_asc`/`type_desc`, and `owner_asc`/`owner_desc` sort by creation time, update time, exact job type, and owner username respectively. These column sorts use descending ID to break ties. Unsupported sort values return 422; omitting `sort` preserves newest-ID-first ordering.
 
 The frontend exposes sorting through the toolbar and column headers. Filters and sorting apply to all accessible matching records **before pagination**. Its collapsible status/type/owner groups and counts describe the current page only. Filter chips remove individual conditions; clearing filters preserves sorting, grouping, status view, and unrelated URL parameters. Filters, sorting, grouping, and pagination survive reloads and browser history through the URL.
 
@@ -108,7 +108,7 @@ The frontend browses all accessible owners by default and offers an optional **O
 | `available_at` | UTC-aware earliest claim time; a pending job can be waiting for its retry delay |
 | `created_at`, `updated_at` | UTC-aware creation and last-update timestamps in ISO 8601 format |
 
-Permission policies and permitted-ID lists are not currently included in job responses.
+Permission policies, permitted-ID lists, and producer attribution are not currently included in job responses.
 
 ### Attempt history
 
@@ -278,9 +278,10 @@ Errors use a top-level `detail` field. Request validation returns an array conta
 | Missing/invalid user token | 401; missing credentials use `Not authenticated`, invalid tokens use `Could not validate credentials` |
 | Login with wrong credentials or inactive user | 401, `Incorrect username or password` |
 | Inactive user on a user-protected route | 403, `Inactive user` |
-| Missing/invalid API key or inactive worker | 401, `Could not validate credentials` |
+| Missing/invalid API key or inactive worker/producer on its corresponding routes | 401, `Could not validate credentials` |
 | Missing/inaccessible job | 404, `Job not found` |
 | Missing/inaccessible worker | 404, `Worker not found` |
+| Missing/unowned producer | 404, `Producer not found` |
 | Empty claim result | 404, `No jobs were found` |
 | Missing attempt or another worker's attempt | 404, `Attempt not found` |
 | Expired lease on a running attempt, for heartbeat or a first outcome | 400, `The lease has expired` |
@@ -288,6 +289,8 @@ Errors use a top-level `detail` field. Request validation returns an array conta
 | Changed or contradictory outcome, or report against a lost attempt | 409, `Conflicting outcome report` |
 | Duplicate username/email | 400, `User with username ... already exists` or `User with email ... already exists` |
 | Duplicate worker name | 409, `Worker name already exists` |
+| Duplicate producer name | 409, `Producer name already exists` |
+| Deleting a referenced worker or producer | 409, `Worker is referenced by jobs or attempts` or `Producer is referenced by jobs` |
 | Nonexistent permission IDs | 422, `Some permitted users do not exist` or `Some permitted workers do not exist` |
 | Invalid fields or malformed body | 422, validation detail array |
 | PostgreSQL data error, including oversized integer IDs or null characters in JSON strings | 422, `Input contains a value PostgreSQL cannot store` |
@@ -298,7 +301,7 @@ Exact replays of accepted outcomes return 200; conflicting reports return 409. I
 
 ### Database timeouts and retries
 
-API and recovery connections default to `DATABASE_STATEMENT_TIMEOUT_MS=5000` per SQL statement and `DATABASE_LOCK_TIMEOUT_MS=1000` per lock acquisition. Both are positive integer milliseconds, at most 2147483647; zero cannot disable them. Set these environment variables on the API/recovery processes to override the defaults, and restart the processes to apply changes. Keep the lock timeout below the statement timeout so it can fire first. Connection establishment and waiting for an application pool slot each have a three-second timeout. Alembic migrations use their own connections and are unaffected by these application limits.
+API and recovery connections default to `DATABASE_STATEMENT_TIMEOUT_MS=5000` per SQL statement and `DATABASE_LOCK_TIMEOUT_MS=1000` per lock acquisition. Both are positive integer milliseconds, at most 2147483647; zero cannot disable them. Set these environment variables on the API/recovery processes to override the defaults, and restart the processes to apply changes. The current Compose file does not forward these two variables; adding them only to `.env.compose` does not override the defaults. A container override requires explicitly passing them to the services. Keep the lock timeout below the statement timeout so it can fire first. Connection establishment and waiting for an application pool slot each have a three-second timeout. Alembic migrations use their own connections and are unaffected by these application limits.
 
 The SQL settings apply to each new physical connection and survive rollback and pool reuse. The [PostgreSQL timeout semantics](https://www.postgresql.org/docs/current/runtime-config-client.html#RUNTIME-CONFIG-CLIENT-STATEMENT) bound individual statements and lock acquisitions, not the total HTTP request, transaction, or worker execution time. Readiness keeps its separate connection and two-second statement limit.
 

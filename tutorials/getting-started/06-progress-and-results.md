@@ -39,7 +39,7 @@ The **Parameters** panel contains what you asked for; **Result** contains what t
 
 1. Select **Jobs**.
 2. Choose **All statuses**, or **Succeeded** if you are looking for your finished addition job. The page opens on **Pending** by default, so a finished job can disappear from that view.
-3. Use **My jobs** to show only your submissions.
+3. To show only your submissions, open **Filters**, enter your exact username in **Owner username**, and select **Apply filters**. Without that filter, the list includes all jobs you can access.
 4. Select the job's type/name in its row to reopen its details.
 
 ![Jobs list on All statuses showing the completed addition job and its Succeeded status](images/06-jobs-list.png)

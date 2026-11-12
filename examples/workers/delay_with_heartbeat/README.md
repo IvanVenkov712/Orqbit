@@ -9,7 +9,7 @@ The wait is split into steps, with bodyless authenticated heartbeats between the
 Start Orqbit and authenticate using the [quickstart](../../../docs/quickstart.md). With your user bearer token, register `POST /workers`:
 
 ```json
-{"name":"delay-with-heartbeat","supported_types":["delay_with_heartbeat"],"permission_policy":"PRIVATE"}
+{"name":"delay-heartbeat","supported_types":["delay_with_heartbeat"],"permission_policy":"PRIVATE"}
 ```
 
 From this directory, using Python 3.13 and uv:

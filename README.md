@@ -6,7 +6,7 @@
 
 **Submit work. Process it independently. Track the outcome.**
 
-Orqbit is a backend platform for asynchronous job processing. It connects applications that need work done with independent workers that know how to do it, giving both a shared HTTP API for submitting, claiming, and tracking jobs.
+Orqbit is a platform for asynchronous job processing, with a FastAPI backend and a browser interface. It connects producer applications that need work done with independent workers that know how to do it, giving both a shared HTTP API for submitting, claiming, and tracking jobs.
 
 A client submits a job with a type and parameters, receives its identity, and can check its progress or retrieve the result later. Workers request compatible jobs when they are ready, execute them in their own processes, and report success or failure. PostgreSQL keeps the job data, ownership, execution attempts, and outcomes together.
 
@@ -44,10 +44,12 @@ For example, the included `add_numbers` worker turns `{"numbers":[2,3,5]}` into 
 - **Owned outcome reporting.** Only the worker assigned to an attempt can report its success or failure; exact replays of accepted reports are safe.
 - **Execution leases and attempt heartbeats.** Workers can renew an owned running attempt through the API. Expired leases reject new outcomes, and a separate recovery process closes abandoned attempts. See the [lease protocol](docs/api.md#attempt-heartbeats-and-leases).
 - **Bounded retries for lost attempts.** Jobs save an attempt limit from configuration; recovery schedules retries with capped backoff and preserves earlier attempts. Retries are disabled by default. See [recovery and bounded retries](docs/api.md#recovery-and-bounded-retries).
-- **Authentication and access policies.** User authentication, individual worker API keys, and permission-aware access control who can view or claim work.
+- **Authentication and access policies.** User bearer tokens, separate worker/producer API keys, and access policies control who can submit, view, or claim work. Owners can reissue keys; producer registrations can also be deactivated.
+- **Producer applications.** Registered producers submit and read their own jobs through dedicated API routes. CLI and interactive console examples demonstrate submission keys, status polling, and explicit retry behavior.
 - **Searchable job and worker lists.** Filter and paginate records to find relevant work and registered workers.
 - **Persistent execution records.** PostgreSQL stores job parameters, attempt ownership, timestamps, and outcomes. An authorized, paginated history endpoint exposes attempt details.
-- **An independent example worker.** A runnable application with its own dependencies, configuration, and tests shows how to integrate through the public API.
+- **Independent example workers.** Addition, prime counting, CSV statistics, and delay examples each have their own dependencies, configuration, and tests.
+- **Browser interface.** Submit jobs, inspect outcomes and attempt history, browse accessible jobs/workers with filters and sorting, and manage producer registrations.
 
 ## What this approach offers
 
@@ -61,7 +63,7 @@ For example, the included `add_numbers` worker turns `{"numbers":[2,3,5]}` into 
 
 ## Where it fits
 
-Orqbit's job-and-worker model can support workloads such as report generation, data transformation, document processing, and integrations with external services. Each workload needs a worker that implements its job type; the included example handles numeric addition.
+Orqbit's job-and-worker model can support workloads such as report generation, data transformation, document processing, and integrations with external services. Each workload needs a worker that implements its job type; included examples handle numeric addition, prime counting, CSV statistics, and lease demonstrations.
 
 It is particularly useful when the application needs a persistent record of submitted work and its outcome, and when different kinds of work belong in independently managed worker applications.
 
@@ -96,12 +98,16 @@ The backend uses **Python, FastAPI, PostgreSQL, SQLAlchemy, Pydantic, and Alembi
 | [Delay with heartbeat](examples/workers/delay_with_heartbeat/README.md) | Long execution with lease renewal and ownership checks |
 | [Count primes worker](examples/workers/count_primes/README.md) | CPU computation in batches with cooperative heartbeat checks |
 | [CSV summary worker](examples/workers/csv_summary/README.md) | Numeric column statistics from CSV text |
+| [CLI producer](examples/producers/add_numbers_cli/README.md) | One-shot submission, explicit key reuse, and optional bounded waiting |
+| [Console producer](examples/producers/add_numbers_console/README.md) | Continuous input, background submission/polling, and in-memory retries |
 | [API reference](docs/api.md) | Authentication, permissions, requests, responses, and errors |
 | [Development](docs/development.md) | Local setup, repository layout, coordination details, migrations, and containers |
 | [Testing](docs/testing.md) | PostgreSQL integration tests and container verification |
 | [Remaining work](docs/status.md) | Backend/frontend tasks, outstanding requirements, and open decisions |
 | [Backend roadmap](docs/roadmap.md) | Remaining implementation and operational work |
-| [Architecture](docs/architecture.md) and [requirements](docs/requirements.md) | Proposed reliability model and design criteria |
+| [Architecture](docs/architecture.md) | Implemented components, coordination guarantees, recommended worker/producer structures, and open decisions |
+| [Requirements](docs/requirements.md) | Outstanding acceptance criteria, distinct from implemented behavior |
+| [Frontend](frontend/README.md) | Browser features, local setup, and interface development |
 
 ## License
 
