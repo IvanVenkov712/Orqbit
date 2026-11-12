@@ -17,6 +17,7 @@ import { AuthProvider, useAuth } from './auth'
 import { JobDetailsPage } from './JobDetailsPage'
 import { JobsPage } from './JobsPage'
 import { RegisterWorkerPage, WorkerDetailsPage, WorkersPage } from './WorkersPage'
+import { CreateProducerPage, ProducerDetailsPage, ProducersPage } from './ProducersPage'
 import { ParameterEditor, readParameters } from './ParameterEditor'
 import type { Parameter } from './ParameterEditor'
 import { Icon } from './Icon'
@@ -26,7 +27,7 @@ import styles from './App.module.css'
 function AppLayout() {
   const { user, logout, restoring, restoreError } = useAuth()
   const location = useLocation()
-  const section = location.pathname.startsWith('/workers') ? 'Workers' : location.pathname.startsWith('/jobs') ? 'Jobs' : 'Account'
+  const section = location.pathname.startsWith('/producers') ? 'Producers' : location.pathname.startsWith('/workers') ? 'Workers' : location.pathname.startsWith('/jobs') ? 'Jobs' : 'Account'
   return (
     <div className={`${styles.app} ${!user ? styles.signedOut : ''}`}>
       <a className={styles.skipLink} href="#main-content">Skip to content</a>
@@ -40,6 +41,7 @@ function AppLayout() {
           <nav className={styles.navigation} aria-label="Main navigation">
             <NavLink to="/jobs" title="Jobs"><Icon name="jobs" />Jobs<Icon name="chevron" size={14} /></NavLink>
             <NavLink to="/workers" title="Workers"><Icon name="workers" />Workers<Icon name="chevron" size={14} /></NavLink>
+            <NavLink to="/producers" title="Producers"><Icon name="arrow" />Producers<Icon name="chevron" size={14} /></NavLink>
           </nav>
           <div className={styles.sidebarNote}><span className={styles.orbitDecoration} aria-hidden="true">◎</span><strong>Work, in motion.</strong><p>Independent workers.<br />One clear view.</p></div>
           <div className={styles.userArea} role="group" aria-label="Current user">
@@ -106,7 +108,7 @@ function AuthPage({ register = false }: { register?: boolean }) {
 
   // Only return to a local application route, never an arbitrary redirect URL.
   const from = location.state?.from
-  const destination = typeof from === 'string' && /^\/(jobs|workers)(\/|\?|#|$)/.test(from) ? from : '/jobs'
+  const destination = typeof from === 'string' && /^\/(jobs|workers|producers)(\/|\?|#|$)/.test(from) ? from : '/jobs'
   if (restoring || restoreError) return <SessionStatus />
   if (user) return <Navigate to={destination} replace />
 
@@ -152,7 +154,7 @@ function AuthPage({ register = false }: { register?: boolean }) {
       <img className={styles.authIcon} src={orqbitIcon} alt="" width="56" height="56" />
       <p className={styles.eyebrow}>Your Orqbit workspace</p>
       <h1>{register ? 'Create an account' : 'Sign in'}</h1>
-      <p>{register ? 'Register an account, then sign in to your workspace.' : 'Sign in with your username to access Jobs and Workers.'}</p>
+      <p>{register ? 'Register an account, then sign in to your workspace.' : 'Sign in with your username to access Jobs, Workers and Producers.'}</p>
       {!register && expired && <p role="status">Your session has expired. Please sign in again.</p>}
       {!register && location.state?.registered && <p role="status">Account created. Sign in with your new credentials.</p>}
       {error && <div className={styles.formError} role="alert">{error.message}</div>}
@@ -401,6 +403,9 @@ function App() {
               <Route path="workers" element={<WorkersPage />} />
               <Route path="workers/new" element={<RegisterWorkerPage />} />
               <Route path="workers/:workerId" element={<WorkerDetailsPage />} />
+              <Route path="producers" element={<ProducersPage />} />
+              <Route path="producers/new" element={<CreateProducerPage />} />
+              <Route path="producers/:producerId" element={<ProducerDetailsPage />} />
             </Route>
             <Route path="login" element={<AuthPage key="login" />} />
             <Route path="register" element={<AuthPage key="register" register />} />

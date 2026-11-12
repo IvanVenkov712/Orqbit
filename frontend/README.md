@@ -1,6 +1,8 @@
 # Orqbit frontend
 
-React, TypeScript, and Vite interface for submitting jobs, inspecting outcomes, and registering independent workers.
+React, TypeScript, and Vite interface for submitting jobs, inspecting outcomes, registering independent workers, and managing producers.
+
+The Producers section lists your producers and supports all current API search options: case-insensitive partial name, exact name, and ID, with paginated lists (20, 50, or 100 per page). You can create producers, reissue API keys, deactivate credentials, and delete producers that are not referenced by jobs. Reissuing a key immediately invalidates the old key and preserves the producer's active state. New keys appear only on the current screen and are discarded when you leave or reload it; they are not stored in browser storage or the query cache. Deactivation preserves existing jobs; reactivation is not currently supported.
 
 See the [frontend roadmap](docs/roadmap.md) for remaining interface work.
 
