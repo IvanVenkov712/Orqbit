@@ -158,14 +158,14 @@ def test_submission_idempotency_preserves_unrelated_integrity_errors(
 
     monkeypatch.setattr(Session, "commit", fail_commit)
 
-    with pytest.raises(IntegrityError) as raised:
-        client.post(
-            "/jobs/",
-            headers={**user_headers, "Idempotency-Key": "submission"},
-            json={"job_type": "example", "params": {}, "permission_policy": "PRIVATE"},
-        )
+    response = client.post(
+        "/jobs/",
+        headers={**user_headers, "Idempotency-Key": "submission"},
+        json={"job_type": "example", "params": {}, "permission_policy": "PRIVATE"},
+    )
 
-    assert raised.value is error
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Database operation failed"}
     with Session(database) as session:
         assert session.scalar(select(func.count()).select_from(Job)) == 0
 

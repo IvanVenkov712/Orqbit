@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     )
 
     database_url: PostgresDsn
+    database_statement_timeout_ms: PositiveInt = Field(default=5000, le=2147483647)
+    database_lock_timeout_ms: PositiveInt = Field(default=1000, le=2147483647)
     lease_seconds: PositiveInt
     lease_extension_seconds: PositiveInt
     max_attempts: PositiveInt = Field(default=1, le=5)

@@ -2,7 +2,8 @@
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import DataError
+from sqlalchemy.exc import DataError, DBAPIError
+from sqlalchemy.exc import TimeoutError as DatabasePoolTimeout
 
 from api.routers.auth_router import auth_router
 from api.routers.claim_router import claim_router
@@ -12,6 +13,7 @@ from api.routers.producer_management_router import producer_management_router
 from api.routers.producer_router import producer_router
 from api.routers.user_router import user_router
 from api.routers.worker_router import worker_router
+from database import is_transient_database_error
 
 app = FastAPI()
 
@@ -23,6 +25,22 @@ app.include_router(user_router)
 app.include_router(worker_router)
 app.include_router(producer_management_router)
 app.include_router(producer_router)
+
+
+@app.exception_handler(DBAPIError)
+@app.exception_handler(DatabasePoolTimeout)
+async def database_failure(request: Request, exc: DBAPIError | DatabasePoolTimeout):
+    temporary = isinstance(exc, DatabasePoolTimeout) or is_transient_database_error(exc)
+    return JSONResponse(
+        status_code=503 if temporary else 500,
+        content={
+            "detail": (
+                "Database temporarily unavailable" if temporary
+                else "Database operation failed"
+            ),
+        },
+        headers={"Cache-Control": "no-store", **({"Retry-After": "1"} if temporary else {})},
+    )
 
 
 @app.exception_handler(DataError)

@@ -291,8 +291,20 @@ Errors use a top-level `detail` field. Request validation returns an array conta
 | Nonexistent permission IDs | 422, `Some permitted users do not exist` or `Some permitted workers do not exist` |
 | Invalid fields or malformed body | 422, validation detail array |
 | PostgreSQL data error, including oversized integer IDs or null characters in JSON strings | 422, `Input contains a value PostgreSQL cannot store` |
+| SQL/lock timeout, connection failure, deadlock/serialization failure, temporary resource exhaustion, or exhausted connection pool | 503, `Database temporarily unavailable`; `Retry-After: 1`, `Cache-Control: no-store` |
+| Other unhandled database-driver errors, including schema or integrity failures | 500, `Database operation failed`; `Cache-Control: no-store` |
 
-Exact replays of accepted outcomes return 200; conflicting reports return 409. Idempotency keys apply to job submission only. PostgreSQL data errors are mapped to a generic response without SQL/exception details; other storage/application failures may still return 500.
+Exact replays of accepted outcomes return 200; conflicting reports return 409. Idempotency keys apply to job submission only. Database responses omit SQL, parameters, credentials, and exception details. Existing route-specific conflict and validation responses take precedence over the generic handlers. Connection errors without SQLSTATE also return 503, although persistent configuration/authentication problems may require operator intervention.
+
+### Database timeouts and retries
+
+API and recovery connections default to `DATABASE_STATEMENT_TIMEOUT_MS=5000` per SQL statement and `DATABASE_LOCK_TIMEOUT_MS=1000` per lock acquisition. Both are positive integer milliseconds, at most 2147483647; zero cannot disable them. Set these environment variables on the API/recovery processes to override the defaults, and restart the processes to apply changes. Keep the lock timeout below the statement timeout so it can fire first. Connection establishment and waiting for an application pool slot each have a three-second timeout. Alembic migrations use their own connections and are unaffected by these application limits.
+
+The SQL settings apply to each new physical connection and survive rollback and pool reuse. The [PostgreSQL timeout semantics](https://www.postgresql.org/docs/current/runtime-config-client.html#RUNTIME-CONFIG-CLIENT-STATEMENT) bound individual statements and lock acquisitions, not the total HTTP request, transaction, or worker execution time. Readiness keeps its separate connection and two-second statement limit.
+
+The API does not automatically replay a failed operation. Closing a failed request's session rolls back its uncommitted transaction and releases locks. A connection failure during or after commit can leave the client unsure whether an operation was stored; a 503 does not guarantee that nothing committed. Reuse the original `Idempotency-Key` and identical payload for submission retries. Replay an identical outcome only for the same owned attempt, subject to the existing lifecycle/lease rules. A lost claim response may leave a running attempt for lease recovery; do not assume a repeated claim returns that attempt. `Retry-After: 1` is a suggested delay, not permission to retry every operation blindly.
+
+Recovery treats statement/lock timeouts as transient scan failures: it rolls back, waits its configured recovery interval, and starts a fresh session. Existing limits for consecutive connection failures without SQLSTATE still apply. Other application failures may still return 500.
 
 ## Health behavior
 

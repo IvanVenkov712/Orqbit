@@ -455,11 +455,12 @@ def test_outcome_database_failure_rolls_back_and_allows_retry(
     payload = {field: {"value": 3}}
     event.listen(Session, "after_flush", fail_after_flush)
     try:
-        with pytest.raises(OperationalError) as raised:
-            client.post(
-                f"/workers/{claim['id']}/{endpoint}", headers=headers, json=payload
-            )
-        assert raised.value is error
+        response = client.post(
+            f"/workers/{claim['id']}/{endpoint}", headers=headers, json=payload
+        )
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Database temporarily unavailable"}
+        assert response.headers["retry-after"] == "1"
     finally:
         event.remove(Session, "after_flush", fail_after_flush)
     assert flushed == [True]

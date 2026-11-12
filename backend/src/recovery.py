@@ -6,7 +6,7 @@ from time import sleep
 from sqlalchemy.exc import OperationalError
 
 from config import settings
-from database import SessionLocal
+from database import SessionLocal, is_transient_database_error
 from services.job_execution import recover_expired_attempts
 
 logger = logging.getLogger(__name__)
@@ -31,10 +31,7 @@ def main() -> None:
                     raise
             else:
                 unknown_failures = 0
-                if not (
-                    sqlstate.startswith(("08", "40", "53"))
-                    or sqlstate in {"57P01", "57P02", "57P03"}
-                ):
+                if not is_transient_database_error(error):
                     raise
             logger.exception("Recovery scan failed; retrying after the interval")
         else:
