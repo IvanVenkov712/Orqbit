@@ -48,6 +48,24 @@ Deactivation preserves published jobs and the stored key hash, but the producer 
 
 The producer schema migration is still pending. These routes require the `producers` table and `jobs.producer_id` column from the current models; the shipped Alembic revisions do not yet create them.
 
+## Producer jobs
+
+These routes authenticate with `CurrentProducer` using `X-API-Key: <producer-api-key>`. Missing, invalid, or inactive producer credentials return 401; a user bearer token alone does not grant access.
+
+| Method | Route | Request / response |
+| --- | --- | --- |
+| POST | `/producer/jobs` | Same JSON payload and required `Idempotency-Key` header as `POST /jobs/`; returns 200 with `JobRead` |
+| GET | `/producer/jobs` | Same filters, sorting, pagination, and `JobSummaryRead` response as `GET /jobs`, restricted to jobs submitted by the authenticated producer |
+| GET | `/producer/jobs/{job_id}` | Returns 200 with an owned `JobRead`, or 404, `Job not found`, for missing or other producers' jobs |
+
+Creation sets the job's `producer_id` to the authenticated producer and `user_id` to its owner. Neither identity is accepted from the payload. Producer reads always restrict by `producer_id`; they exclude jobs submitted directly by the owner or by another producer of the same owner, even when public or shared. Owner filters do not broaden that access.
+
+Listing accepts `owner_id`, `owner_username`, `status`, `job_type`, `attempt_status`, `created_from`, `created_before`, `limit`, `offset`, and `sort`, with the same validation and ordering as the user job list below. An empty result returns `[]`.
+
+Submission keys retain the existing database scope `(user_id, idempotency_key)`. A matching retry from the same producer returns its existing job; changed content or a key already used by another producer or directly by that user returns 409, `Conflicting create requests`. The user submission route likewise rejects replaying a producer's key. Concurrent uniqueness conflicts use the same ownership check. Independent per-producer key namespaces would require a schema migration and are not implemented here. Invalid permission IDs return 422 as on user submission.
+
+These routes share the pending producer schema migration described above.
+
 ## Jobs
 
 | Method | Route | Request | Response |

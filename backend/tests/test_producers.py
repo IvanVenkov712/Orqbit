@@ -1,5 +1,6 @@
 """Producer service and DTO coverage while its schema migration is pending."""
 
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -11,10 +12,14 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from dto.job import JobCreate
 from dto.producer import ProducerAPIKeyResponse, ProducerCreate, ProducerCreateResponse
+from models.job import Job, JobStatus, PermissionPolicy
 from models.producers import Producer
 from models.user import User
 from services.api_key_auth import hash_api_key
+from services.job import JobCreationConflict, get_request_fingerprint
+from services.job import create_job as create_job_service
 from services.producer import (
     ProducerCreationConflict,
     ProducerDeletionConflict,
@@ -499,3 +504,350 @@ def test_producer_management_requires_active_user(
     management_session.delete.assert_not_called()
     management_session.commit.assert_not_called()
     management_session.scalars.assert_not_called()
+
+
+@pytest.fixture
+def producer_job(producer):
+    now = datetime(2026, 11, 12, tzinfo=UTC)
+    payload = JobCreate(job_type="example", params={}, permission_policy="PRIVATE")
+    return Job(
+        id=100,
+        user=producer.user,
+        user_id=producer.user_id,
+        producer=producer,
+        producer_id=producer.id,
+        job_type=payload.job_type,
+        params=payload.params,
+        permission_policy=PermissionPolicy.PRIVATE,
+        status=JobStatus.PENDING,
+        idempotency_key="submission",
+        request_fingerprint=get_request_fingerprint(payload),
+        max_attempts=1,
+        attempts_count=0,
+        available_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.fixture
+def producer_client(producer, management_session):
+    from database import get_session
+    from main import app
+
+    with (
+        patch.dict(
+            app.dependency_overrides,
+            {
+                get_session: lambda: management_session,
+                get_current_producer: lambda: producer,
+            },
+        ),
+        TestClient(app) as client,
+    ):
+        yield client
+
+
+def test_producer_creates_job_with_authenticated_ownership(
+    producer_client, management_session, producer, producer_job
+):
+    def refresh(job):
+        for field in (
+            "id",
+            "user_id",
+            "producer_id",
+            "status",
+            "max_attempts",
+            "attempts_count",
+            "available_at",
+            "created_at",
+            "updated_at",
+        ):
+            setattr(job, field, getattr(producer_job, field))
+
+    management_session.scalar.return_value = None
+    management_session.scalars.return_value.all.return_value = []
+    management_session.refresh.side_effect = refresh
+    response = producer_client.post(
+        "/producer/jobs",
+        headers={"Idempotency-Key": "submission"},
+        json={
+            "job_type": "example",
+            "params": {},
+            "permission_policy": "PRIVATE",
+            "producer_id": 999,
+            "user_id": 999,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == 100
+    assert response.json()["user_id"] == producer.user_id
+    assert response.json()["status"] == "PENDING"
+    created = management_session.add.call_args.args[0]
+    assert created.producer is producer
+    assert created.user is producer.user
+    assert created.idempotency_key == "submission"
+    management_session.commit.assert_called_once()
+
+
+@pytest.mark.parametrize("saved_producer_id", [10, 11, None])
+@pytest.mark.parametrize("race", [False, True])
+def test_producer_job_replays_never_return_other_submitters_jobs(
+    producer_client, management_session, producer, producer_job, saved_producer_id, race
+):
+    producer_job.producer_id = saved_producer_id
+    if race:
+        management_session.scalar.side_effect = [None, producer_job]
+        management_session.scalars.return_value.all.return_value = []
+        management_session.commit.side_effect = IntegrityError(
+            None, None, UniqueViolation()
+        )
+    else:
+        management_session.scalar.return_value = producer_job
+    response = producer_client.post(
+        "/producer/jobs",
+        headers={"Idempotency-Key": "submission"},
+        json={"job_type": "example", "params": {}, "permission_policy": "PRIVATE"},
+    )
+
+    if saved_producer_id == producer.id:
+        assert response.status_code == 200
+        assert response.json()["id"] == producer_job.id
+    else:
+        assert response.status_code == 409
+        assert response.json() == {"detail": "Conflicting create requests"}
+    if race:
+        management_session.rollback.assert_called_once()
+    else:
+        management_session.commit.assert_not_called()
+
+
+def test_user_submission_cannot_replay_producer_job(
+    management_session, producer, producer_job
+):
+    management_session.scalar.return_value = producer_job
+    payload = JobCreate(job_type="example", params={}, permission_policy="PRIVATE")
+    with pytest.raises(JobCreationConflict):
+        create_job_service(management_session, producer.user, payload, "submission")
+
+
+def test_producer_job_replay_rejects_changed_payload(
+    producer_client, management_session, producer_job
+):
+    management_session.scalar.return_value = producer_job
+    response = producer_client.post(
+        "/producer/jobs",
+        headers={"Idempotency-Key": "submission"},
+        json={
+            "job_type": "example",
+            "params": {"changed": True},
+            "permission_policy": "PRIVATE",
+        },
+    )
+    assert response.status_code == 409
+    management_session.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("key", [None, "", "   ", "x" * 101])
+def test_producer_submission_requires_valid_idempotency_key(
+    producer_client, management_session, key
+):
+    response = producer_client.post(
+        "/producer/jobs",
+        headers={} if key is None else {"Idempotency-Key": key},
+        json={"job_type": "example", "params": {}, "permission_policy": "PRIVATE"},
+    )
+    assert response.status_code == 422
+    management_session.add.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid", ["payload", "permission-ids"])
+def test_producer_submission_rejects_invalid_payload_or_permissions(
+    producer_client, management_session, invalid
+):
+    management_session.scalar.return_value = None
+    management_session.scalars.return_value.all.return_value = []
+    payload = {"job_type": "example", "params": {}, "permission_policy": "PRIVATE"}
+    if invalid == "payload":
+        payload["params"] = []
+    else:
+        payload["permitted_user_ids"] = [999]
+    response = producer_client.post(
+        "/producer/jobs", headers={"Idempotency-Key": "submission"}, json=payload
+    )
+    assert response.status_code == 422
+    management_session.add.assert_not_called()
+    management_session.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "sort, order",
+    [
+        (None, "jobs.id DESC"),
+        ("status_updated", "jobs.status, jobs.updated_at DESC, jobs.id DESC"),
+        ("status_desc", "jobs.status DESC, jobs.updated_at DESC, jobs.id DESC"),
+        ("created_asc", "jobs.created_at ASC, jobs.id DESC"),
+        ("created_desc", "jobs.created_at DESC, jobs.id DESC"),
+        ("updated_asc", "jobs.updated_at ASC, jobs.id DESC"),
+        ("updated_desc", "jobs.updated_at DESC, jobs.id DESC"),
+        ("type_asc", "jobs.job_type ASC, jobs.id DESC"),
+        ("type_desc", "jobs.job_type DESC, jobs.id DESC"),
+        ("owner_asc", "users.username ASC, jobs.id DESC"),
+        ("owner_desc", "users.username DESC, jobs.id DESC"),
+    ],
+)
+def test_producer_job_list_keeps_ownership_filters_sorting_and_summary(
+    producer_client, management_session, producer, producer_job, sort, order
+):
+    management_session.scalars.return_value.all.return_value = [producer_job]
+    params = {
+        "owner_id": producer.user_id,
+        "owner_username": producer.user.username,
+        "status": "PENDING",
+        "job_type": "example",
+        "attempt_status": "LOST",
+        "created_from": "2026-11-11T00:00:00Z",
+        "created_before": "2026-11-13T00:00:00Z",
+        "limit": 1,
+        "offset": 2,
+    }
+    if sort is not None:
+        params["sort"] = sort
+    response = producer_client.get("/producer/jobs", params=params)
+
+    assert response.status_code == 200
+    assert response.json()[0]["id"] == producer_job.id
+    assert set(response.json()[0]) == {
+        "id",
+        "user_id",
+        "owner_username",
+        "job_type",
+        "status",
+        "created_at",
+        "updated_at",
+    }
+    stmt = management_session.scalars.call_args.args[0]
+    compiled = stmt.compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    assert "WHERE jobs.producer_id =" in sql
+    assert compiled.params["producer_id_1"] == producer.id
+    assert " OR " not in sql
+    assert "jobs.user_id =" in sql and "users.username =" in sql
+    assert "jobs.status =" in sql and "jobs.job_type =" in sql
+    assert "EXISTS" in sql and "job_attempts.status =" in sql
+    assert "jobs.created_at >=" in sql and "jobs.created_at <" in sql
+    assert sql.partition("ORDER BY ")[2].startswith(order)
+    assert list(compiled.params.values())[-2:] == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"status": "INVALID"},
+        {"attempt_status": "INVALID"},
+        {"sort": "invalid"},
+        {"limit": 0},
+        {"limit": 101},
+        {"offset": -1},
+        {"owner_username": ""},
+        {"created_from": "invalid"},
+        {"created_from": "2026-11-12T00:00:00"},
+        {
+            "created_from": "2026-11-13T00:00:00Z",
+            "created_before": "2026-11-12T00:00:00Z",
+        },
+        {
+            "created_from": "2026-11-12T00:00:00Z",
+            "created_before": "2026-11-12T00:00:00Z",
+        },
+    ],
+)
+def test_producer_job_list_validates_filters(
+    producer_client, management_session, params
+):
+    response = producer_client.get("/producer/jobs", params=params)
+    assert response.status_code == 422
+    management_session.scalars.assert_not_called()
+
+
+def test_producer_job_list_empty(producer_client, management_session):
+    management_session.scalars.return_value.all.return_value = []
+    response = producer_client.get("/producer/jobs")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.parametrize("found", [True, False])
+def test_producer_job_by_id_is_scoped_to_authenticated_producer(
+    producer_client, management_session, producer, producer_job, found
+):
+    management_session.scalar.return_value = producer_job if found else None
+    response = producer_client.get("/producer/jobs/100")
+    if found:
+        assert response.status_code == 200
+        assert response.json()["id"] == 100
+        assert response.json()["params"] == {}
+        assert response.json()["attempt_ids"] == []
+    else:
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Job not found"}
+    stmt = management_session.scalar.call_args.args[0]
+    compiled = stmt.compile(dialect=postgresql.dialect())
+    assert "WHERE jobs.producer_id =" in str(compiled)
+    assert "jobs.id =" in str(compiled)
+    assert compiled.params["producer_id_1"] == producer.id
+    assert set(compiled.params.values()) == {producer.id, 100}
+    assert " OR " not in str(compiled)
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("POST", "/producer/jobs"),
+        ("GET", "/producer/jobs"),
+        ("GET", "/producer/jobs/100"),
+    ],
+)
+@pytest.mark.parametrize("credentials", ["missing", "bearer", "invalid", "inactive"])
+def test_producer_job_routes_require_active_producer_key(
+    producer_client, management_session, producer, method, path, credentials
+):
+    from main import app
+
+    del app.dependency_overrides[get_current_producer]
+    headers = {"Idempotency-Key": "submission"}
+    management_session.scalar.return_value = None
+    if credentials == "bearer":
+        headers["Authorization"] = "Bearer user-token"
+    elif credentials in {"invalid", "inactive"}:
+        headers["X-API-Key"] = "old-key"
+        if credentials == "inactive":
+            producer.active = False
+            management_session.scalar.return_value = producer
+    response = producer_client.request(
+        method,
+        path,
+        headers=headers,
+        json={"job_type": "example", "params": {}, "permission_policy": "PRIVATE"},
+    )
+    assert response.status_code == 401
+    management_session.scalars.assert_not_called()
+    management_session.add.assert_not_called()
+    management_session.commit.assert_not_called()
+
+
+def test_producer_job_route_authenticates_real_dependency(
+    producer_client, management_session, producer, producer_job
+):
+    from main import app
+
+    del app.dependency_overrides[get_current_producer]
+    management_session.scalar.side_effect = [producer, producer_job]
+    response = producer_client.get(
+        "/producer/jobs/100", headers={"X-API-Key": "old-key"}
+    )
+    assert response.status_code == 200
+    auth_stmt = management_session.scalar.call_args_list[0].args[0]
+    compiled = auth_stmt.compile(dialect=postgresql.dialect())
+    assert list(compiled.params.values()) == [hash_api_key("old-key")]

@@ -65,6 +65,7 @@ def create_job(
     if saved is None:
         job = Job(
             user=user,
+            producer=producer,
             idempotency_key=idempotency_key,
             request_fingerprint=fingerprint,
             job_type=payload.job_type,
@@ -88,9 +89,16 @@ def create_job(
             session.refresh(job)
             return job
 
-    if saved.request_fingerprint != fingerprint:
+    if (
+        saved.request_fingerprint != fingerprint
+        or saved.producer_id != (producer.id if producer is not None else None)
+    ):
         raise JobCreationConflict("Conflicting create requests")
     return saved
+
+
+def accessible_producer_jobs_query(producer: Producer):
+    return select(Job).where(Job.producer_id == producer.id)
 
 
 def accessible_user_jobs_query(user: User):
