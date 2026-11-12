@@ -41,6 +41,12 @@ def reissue_producer_api_key(
     return ProducerAPIKeyResponse(secret_api_key=api_key)
 
 
+def deactivate_producer(session: Session, producer: Producer) -> ProducerRead:
+    producer.active = False
+    session.commit()
+    return producer_read_from_producer(producer)
+
+
 def delete_producer(session: Session, producer: Producer) -> None:
     # Block new job foreign-key references until deletion commits or rolls back.
     session.scalar(

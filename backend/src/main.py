@@ -8,6 +8,7 @@ from api.routers.auth_router import auth_router
 from api.routers.claim_router import claim_router
 from api.routers.health_router import health_router
 from api.routers.job_router import job_router
+from api.routers.producer_management_router import producer_management_router
 from api.routers.user_router import user_router
 from api.routers.worker_router import worker_router
 
@@ -19,6 +20,7 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(user_router)
 app.include_router(worker_router)
+app.include_router(producer_management_router)
 
 
 @app.exception_handler(DataError)

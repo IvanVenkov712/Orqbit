@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from database import SessionDep
 from dto.job import JobCreate
 from models.job import Job, PermissionPolicy
+from models.producers import Producer
 from models.user import User
 from models.worker import Worker
 from services.user_auth import CurrentUser

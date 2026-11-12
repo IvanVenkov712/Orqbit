@@ -24,6 +24,30 @@ Any active authenticated user can discover other active users for access-policy 
 
 Both discovery endpoints return only `id`, `username`, and `full_name`. They omit email, role, account status, and password hashes. `GET /users/{user_id}` returns 404, `User not found`, for missing or inactive users. `/users/me/` keeps its existing, fuller response for the signed-in user. Discovery does not grant access to a user's jobs or workers; existing permission policies still apply.
 
+## Producer management
+
+All producer-management routes require the owner's user bearer token. Producer API keys do not grant management access. Missing producers and producers belonging to another user both return 404, `Producer not found`.
+
+| Method | Route | Request / response |
+| --- | --- | --- |
+| POST | `/producers` | JSON: `{"name":"report-producer"}`; returns 200 with metadata and `secret_api_key` |
+| GET | `/producers` | Optional `query`, `limit`, `offset`; returns 200 with the current user's producers |
+| GET | `/producers/by-name/{name}` | Exact, case-sensitive name; returns 200 with owned producer metadata, or 404 |
+| GET | `/producers/{producer_id}` | Integer ID; returns 200 with owned producer metadata, or 404 |
+| POST | `/producers/{producer_id}/api-key` | No body; returns 200 with a new `secret_api_key`, replacing the old key |
+| DELETE | `/producers/{producer_id}` | Returns 204 without a body; returns 409 if the producer has published jobs |
+| POST | `/producers/{producer_id}/deactivate` | No body; sets `active=false` and returns 200 with producer metadata |
+
+Names contain 3-16 ASCII letters, digits, underscores, or hyphens and are globally unique. A duplicate name returns 409, `Producer name already exists`. Metadata contains `id`, `name`, `active`, `user_id`, and `owner_username`; reads and deactivation responses omit API keys and hashes. Creation and key reissue return the plaintext key so the caller can store it; only its hash is persisted.
+
+Listing includes active and inactive producers owned by the caller, ordered by descending ID. `query` is an optional case-insensitive literal substring of the name (1-16 characters); `%` and `_` are not wildcards. Filtering happens before pagination: `limit` defaults to 50 and must be 1-100, and `offset` defaults to 0 and must be nonnegative. No matches returns `[]`; invalid input returns 422.
+
+Both single-producer GET routes include active and inactive registrations owned by the caller. Name lookup follows the same name format as creation and matches the complete stored name, including letter case. Numeric names such as `123` use `/producers/by-name/123`; `/producers/123` always looks up an ID. Invalid ID or name formats return 422.
+
+Deactivation preserves published jobs and the stored key hash, but the producer authentication dependency rejects inactive producers. Repeated deactivation succeeds. Reissuing an inactive producer's key does not reactivate it. A producer with jobs must be deactivated rather than deleted; the deletion conflict is 409, `Producer is referenced by jobs`.
+
+The producer schema migration is still pending. These routes require the `producers` table and `jobs.producer_id` column from the current models; the shipped Alembic revisions do not yet create them.
+
 ## Jobs
 
 | Method | Route | Request | Response |
