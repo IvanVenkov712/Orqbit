@@ -382,3 +382,154 @@ def test_lease_upgrade_rejects_running_attempts_without_partial_changes(
             connection.execute(text("UPDATE job_attempts SET status = 'FAILED'"))
             connection.execute(text("UPDATE jobs SET status = 'FAILED'"))
         command.upgrade(alembic_config, "head")
+
+
+def test_retry_upgrade_backfills_counters_without_changing_jobs_or_attempts(
+    database, alembic_config, claim_worker, job_factory, monkeypatch
+):
+    from config import settings
+
+    worker, _ = claim_worker
+    with Session(database) as session:
+        jobs = [
+            job_factory(),
+            job_factory(
+                status=JobStatus.SUCCEEDED,
+                result={"ok": True},
+                attempts_count=1,
+                max_attempts=1,
+                attempts=[
+                    JobAttempt(
+                        worker_id=worker.id,
+                        attempt_number=1,
+                        status=AttemptStatus.SUCCEEDED,
+                        params={},
+                        result={"ok": True},
+                    )
+                ],
+            ),
+            job_factory(
+                status=JobStatus.RUNNING,
+                attempts_count=3,
+                max_attempts=3,
+                # Gaps must not cause the next attempt number to be reused.
+                attempts=[
+                    JobAttempt(
+                        worker_id=worker.id,
+                        attempt_number=number,
+                        status=status,
+                        params={"number": number},
+                    )
+                    for number, status in (
+                        (1, AttemptStatus.LOST),
+                        (3, AttemptStatus.RUNNING),
+                    )
+                ],
+            ),
+        ]
+        session.add_all(jobs)
+        session.commit()
+        expected_counts = {
+            jobs[0].id: (0, 1),
+            jobs[1].id: (1, 1),
+            jobs[2].id: (3, 3),
+        }
+
+    monkeypatch.setattr(settings, "max_attempts", 5)
+    try:
+        command.downgrade(alembic_config, "43dcc043466c")
+        with database.connect() as connection:
+            inspector = inspect(connection)
+            assert {"max_attempts", "attempts_count", "available_at"}.isdisjoint(
+                column["name"] for column in inspector.get_columns("jobs")
+            )
+            assert {
+                "ck_jobs_positive_max_attempts",
+                "ck_jobs_attempts_count_within_limit",
+            }.isdisjoint(
+                constraint["name"]
+                for constraint in inspector.get_check_constraints("jobs")
+            )
+            original_jobs = (
+                connection.execute(text("SELECT * FROM jobs ORDER BY id"))
+                .mappings()
+                .all()
+            )
+            original_attempts = (
+                connection.execute(text("SELECT * FROM job_attempts ORDER BY id"))
+                .mappings()
+                .all()
+            )
+            before_upgrade = connection.scalar(text("SELECT clock_timestamp()"))
+
+        command.upgrade(alembic_config, "head")
+        with database.connect() as connection:
+            after_upgrade = connection.scalar(text("SELECT clock_timestamp()"))
+            columns = {
+                column["name"]: column
+                for column in inspect(connection).get_columns("jobs")
+            }
+            for name in ("max_attempts", "attempts_count", "available_at"):
+                assert columns[name]["nullable"] is False
+            assert columns["max_attempts"]["default"] is None
+            assert columns["attempts_count"]["default"] is None
+            assert "clock_timestamp()" in columns["available_at"]["default"]
+            assert columns["available_at"]["type"].timezone is True
+            migrated_jobs = (
+                connection.execute(text("SELECT * FROM jobs ORDER BY id"))
+                .mappings()
+                .all()
+            )
+            for before, after in zip(original_jobs, migrated_jobs, strict=True):
+                values = dict(after)
+                assert (
+                    values.pop("attempts_count"),
+                    values.pop("max_attempts"),
+                ) == expected_counts[before["id"]]
+                assert before_upgrade <= values.pop("available_at") <= after_upgrade
+                assert values == dict(before)
+            assert (
+                connection.execute(text("SELECT * FROM job_attempts ORDER BY id"))
+                .mappings()
+                .all()
+                == original_attempts
+            )
+
+        # The fixed historical backfill must not change defaults for new jobs.
+        with Session(database) as session:
+            job = job_factory()
+            session.add(job)
+            session.commit()
+            assert job.max_attempts == 5
+            assert job.attempts_count == 0
+            assert job.available_at is not None
+        command.check(alembic_config)
+    finally:
+        command.upgrade(alembic_config, "head")
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "constraint"),
+    [
+        ("max_attempts", 0, "ck_jobs_positive_max_attempts"),
+        ("attempts_count", -1, "ck_jobs_attempts_count_within_limit"),
+        ("attempts_count", 2, "ck_jobs_attempts_count_within_limit"),
+    ],
+)
+def test_retry_constraints_reject_invalid_counters(
+    database, job_factory, column, value, constraint
+):
+    with Session(database) as session:
+        job = job_factory(max_attempts=1)
+        session.add(job)
+        session.commit()
+        job_id = job.id
+        with pytest.raises(IntegrityError) as raised:
+            setattr(job, column, value)
+            session.commit()
+        session.rollback()
+        assert raised.value.orig.sqlstate == "23514"
+        assert raised.value.orig.diag.constraint_name == constraint
+        job = session.get(Job, job_id)
+        assert job.attempts_count == 0
+        assert job.max_attempts == 1

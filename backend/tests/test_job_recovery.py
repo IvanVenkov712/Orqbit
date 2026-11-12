@@ -55,6 +55,8 @@ def test_recovery_processes_backlog_in_bounded_batches(
                     "idempotency_key": f"recovery-backlog-{index}",
                     "request_fingerprint": "test-fingerprint",
                     "status": JobStatus.RUNNING,
+                    "attempts_count": 1,
+                    "max_attempts": 1,
                 }
                 for index in range(attempt_count)
             ],
@@ -126,6 +128,8 @@ def test_recovery_preserves_unexpired_and_terminal_attempts(database, claim_work
                 else JobStatus(status.value),
                 result={"value": index} if status == AttemptStatus.SUCCEEDED else None,
                 error={"message": "failed"} if status == AttemptStatus.FAILED else None,
+                attempts_count=1,
+                max_attempts=2 if index == 2 else 1,
             )
             attempt = JobAttempt(
                 job=job,
@@ -145,6 +149,7 @@ def test_recovery_preserves_unexpired_and_terminal_attempts(database, claim_work
             if index == 2:
                 # An older lost attempt must not fail a currently leased job.
                 attempt.attempt_number = 2
+                job.attempts_count = 2
                 session.add(
                     JobAttempt(
                         job=job,
@@ -194,6 +199,11 @@ def test_recovery_preserves_unexpired_and_terminal_attempts(database, claim_work
                 if record_id in changed_ids:
                     assert record["updated_at"] >= expected["updated_at"]
                     expected.update(status=status, updated_at=record["updated_at"])
+                    if model is Job:
+                        expected["error"] = {
+                            "code": "attempts_exhausted",
+                            "message": "Maximum attempts reached after lease expiry",
+                        }
                 assert record == expected
         recover_expired_attempts(session)
 
@@ -206,13 +216,18 @@ def test_recovery_preserves_unexpired_and_terminal_attempts(database, claim_work
             } == after[model]
 
 
-def test_recovery_failure_rolls_back_attempt_and_job(database, claimed_attempt):
+@pytest.mark.parametrize("max_attempts", [1, 3])
+def test_recovery_failure_rolls_back_attempt_and_job(
+    database, claimed_attempt, max_attempts
+):
     from services.job_execution import recover_expired_attempts
 
     claim, _ = claimed_attempt
     with Session(database) as session:
         now = session.scalar(select(func.clock_timestamp()))
-        session.get(JobAttempt, claim["id"]).lease_expires_at = now - timedelta(days=1)
+        attempt = session.get(JobAttempt, claim["id"])
+        attempt.lease_expires_at = now - timedelta(days=1)
+        attempt.job.max_attempts = max_attempts
         session.commit()
         before_attempt = session.execute(select(JobAttempt.__table__)).mappings().one()
         before_job = session.execute(select(Job.__table__)).mappings().one()
@@ -393,6 +408,7 @@ def test_recovery_runner_resets_unknown_error_count_after_success(monkeypatch):
     assert pause.call_count == 6
 
 
+@pytest.mark.parametrize("max_attempts", [1, 3])
 @pytest.mark.parametrize(
     ("other_operation", "recovery_first"),
     [
@@ -406,7 +422,13 @@ def test_recovery_runner_resets_unknown_error_count_after_success(monkeypatch):
     ],
 )
 def test_recovery_serializes_with_reports_and_other_recovery(
-    client, database, claimed_attempt, monkeypatch, other_operation, recovery_first
+    client,
+    database,
+    claimed_attempt,
+    monkeypatch,
+    other_operation,
+    recovery_first,
+    max_attempts,
 ):
     from config import settings
     from database import engine as api_engine
@@ -418,7 +440,9 @@ def test_recovery_serializes_with_reports_and_other_recovery(
         now = session.scalar(select(func.clock_timestamp()))
         original_deadline = now + timedelta(hours=-1 if recovery_first else 1)
         recovery_cutoff = now + timedelta(hours=2)
-        session.get(JobAttempt, claim["id"]).lease_expires_at = original_deadline
+        attempt = session.get(JobAttempt, claim["id"])
+        attempt.lease_expires_at = original_deadline
+        attempt.job.max_attempts = max_attempts
         session.commit()
 
     original_get_db_now = job_execution.get_db_now
@@ -526,7 +550,9 @@ def test_recovery_serializes_with_reports_and_other_recovery(
         attempt = session.get(JobAttempt, claim["id"])
         if recovery_first:
             assert attempt.status == AttemptStatus.LOST
-            assert attempt.job.status == JobStatus.FAILED
+            assert attempt.job.status == (
+                JobStatus.FAILED if max_attempts == 1 else JobStatus.PENDING
+            )
         elif other_operation == "heartbeat":
             assert attempt.status == AttemptStatus.RUNNING
             assert attempt.job.status == JobStatus.RUNNING
@@ -545,6 +571,16 @@ def test_recovery_serializes_with_reports_and_other_recovery(
             assert attempt.lease_expires_at == original_deadline
         if recovery_first or other_operation == "heartbeat":
             assert attempt.result is None and attempt.job.result is None
-            assert attempt.error is None and attempt.job.error is None
+            assert attempt.error is None
+            assert attempt.job.error == (
+                {
+                    "code": "attempts_exhausted",
+                    "message": "Maximum attempts reached after lease expiry",
+                }
+                if recovery_first and max_attempts == 1
+                else None
+            )
+        assert attempt.job.attempts_count == 1
+        assert attempt.job.max_attempts == max_attempts
         assert attempt.params == claim["params"]
         assert session.scalar(select(func.count()).select_from(JobAttempt)) == 1
