@@ -52,6 +52,7 @@ def test_migrated_schema_has_postgresql_types(database, alembic_config):
             "job_permitted_workers",
             "supported_job_types",
             "worker_permitted_users",
+            "producers",
         }
         enums = {enum["name"]: enum["labels"] for enum in inspector.get_enums()}
         assert enums["job_permission_policy"] == [
@@ -87,6 +88,56 @@ def test_migrated_schema_has_postgresql_types(database, alembic_config):
             assert columns[name]["nullable"] is False
         for name in ("idempotency_key", "request_fingerprint"):
             assert columns[name]["default"] is None
+        assert columns["producer_id"]["nullable"] is True
+        producer_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("jobs")
+            if fk["constrained_columns"] == ["producer_id"]
+        )
+        assert producer_fk["name"] == "fk_jobs_producer_id"
+        assert producer_fk["referred_table"] == "producers"
+        assert producer_fk["referred_columns"] == ["id"]
+
+    command.check(alembic_config)
+
+
+def test_producer_migration_round_trip_preserves_jobs(
+    database, alembic_config, job_factory
+):
+    with Session(database) as session:
+        session.add(job_factory(params={"preserve": [True, None]}))
+        session.commit()
+
+    with database.connect() as connection:
+        original = dict(connection.execute(text("SELECT * FROM jobs")).mappings().one())
+        assert original.pop("producer_id") is None
+
+    try:
+        for _ in range(2):
+            command.downgrade(alembic_config, "a7d77c0723e0")
+            with database.connect() as connection:
+                inspector = inspect(connection)
+                assert "producers" not in inspector.get_table_names()
+                assert "producer_id" not in {
+                    column["name"] for column in inspector.get_columns("jobs")
+                }
+                assert (
+                    dict(
+                        connection.execute(text("SELECT * FROM jobs")).mappings().one()
+                    )
+                    == original
+                )
+
+            command.upgrade(alembic_config, "head")
+            with database.connect() as connection:
+                assert "producers" in inspect(connection).get_table_names()
+                migrated = dict(
+                    connection.execute(text("SELECT * FROM jobs")).mappings().one()
+                )
+                assert migrated.pop("producer_id") is None
+                assert migrated == original
+    finally:
+        command.upgrade(alembic_config, "head")
 
     command.check(alembic_config)
 
@@ -507,6 +558,7 @@ def test_retry_upgrade_backfills_counters_without_changing_jobs_or_attempts(
                     values.pop("max_attempts"),
                 ) == expected_counts[before["id"]]
                 assert before_upgrade <= values.pop("available_at") <= after_upgrade
+                assert values.pop("producer_id") is None
                 assert values == dict(before)
             assert (
                 connection.execute(text("SELECT * FROM job_attempts ORDER BY id"))
