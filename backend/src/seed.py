@@ -16,6 +16,7 @@ from models import (
     JobAttempt,
     PermittedUser,
     PermittedWorker,
+    Producer,
     SupportedJobType,
     User,
     Worker,
@@ -26,14 +27,14 @@ from models.job import PermissionPolicy as JobPolicy
 from models.job_attempts import AttemptStatus
 from models.user import UserRole
 from models.worker import PermissionPolicy as WorkerPolicy
+from services.api_key_auth import generate_api_key, hash_api_key
 from services.job import get_request_fingerprint
 from services.job_execution import get_db_now, retry_available_at, retry_backoff
 from services.user_auth import get_password_hash
-from services.worker_auth import generate_api_key, hash_api_key
 
 
 def seed_data(session: Session, password: str) -> dict[str, str]:
-    """Add demo records; the caller owns commit/rollback. Return new worker keys."""
+    """Add demo records; the caller owns commit/rollback. Return new API keys."""
     accounts = [
         ("demo_admin", "Demo Administrator", UserRole.ADMIN, True),
         ("demo_alice", "Alice Petrova", UserRole.REGULAR, True),
@@ -119,6 +120,26 @@ def seed_data(session: Session, password: str) -> dict[str, str]:
     session.add_all(workers)
     session.flush()
     math, data, delay, multi, _, _ = workers
+
+    producer_specs = [
+        ("demo_reports", alice, True),
+        ("demo_imports", bob, True),
+        ("demo_scheduler", carol, True),
+        ("demo_disabled", alice, False),
+    ]
+    for name, owner, active in producer_specs:
+        key = generate_api_key()
+        keys[name] = key
+        session.add(
+            Producer(
+                name=name,
+                user=owner,
+                active=active,
+                secret_api_key_hash=hash_api_key(key),
+                created_at=now - timedelta(days=20),
+                updated_at=now - timedelta(days=1),
+            )
+        )
 
     examples = [
         ("add_numbers", {"numbers": [2, -3, 5.5, 0]}, {"sum": 4.5}, math),
@@ -257,6 +278,7 @@ def clear_data(session: Session) -> None:
         WorkerPermittedUser,
         SupportedJobType,
         Job,
+        Producer,
         Worker,
         User,
     ):
@@ -289,8 +311,8 @@ def main() -> None:
         )
 
     if keys:
-        print("Created 5 users, 6 workers, 40 jobs, and 50 attempts.")
-        print("Generated worker API keys (shown only now):")
+        print("Created 5 users, 6 workers, 4 producers, 40 jobs, and 50 attempts.")
+        print("Generated worker and producer API keys (shown only now):")
         for name, key in keys.items():
             print(f"  {name}: {key}")
     else:

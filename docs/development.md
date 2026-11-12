@@ -107,10 +107,12 @@ hashes. All demo accounts use the supplied password:
 | `demo_carol` | REGULAR | Yes |
 | `demo_inactive` | REGULAR | No |
 
-Each run creates 6 workers, 40 jobs, and 50 attempts. Workers include private,
-shared, public, inactive, and multiple-capability examples. Their API keys are
-generated, stored only as hashes, and printed once after a successful commit.
-Use a printed key as `API_KEY` in a compatible example worker; `demo_paused`
+Each run creates 6 workers, 4 producers, 40 jobs, and 50 attempts. Producers
+include `demo_reports` (Alice), `demo_imports` (Bob), `demo_scheduler` (Carol),
+and inactive `demo_disabled` (Alice). Workers include private,
+shared, public, inactive, and multiple-capability examples. Worker and producer
+API keys are generated, stored only as hashes, and printed once after a successful
+commit. Use a printed worker key as `API_KEY` in a compatible example worker; `demo_paused`
 is inactive and cannot authenticate. Jobs cover all five permission policies
 and the `add_numbers`, `count_primes`, `delay`, `delay_with_heartbeat`, and
 `csv_summary` types. Every type has eight scenarios: pending, running, succeeded,

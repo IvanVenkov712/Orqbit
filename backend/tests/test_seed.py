@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import seed
 from dto.job import JobCreate
-from models import Job, JobAttempt, User, Worker
+from models import Job, JobAttempt, Producer, User, Worker
 from models.base import Base
 from models.job import JobStatus
 from models.job import PermissionPolicy as JobPolicy
@@ -38,6 +38,7 @@ def test_seed_creates_varied_consistent_data(database, monkeypatch):
     with Session(database) as session:
         users = session.scalars(select(User)).all()
         workers = session.scalars(select(Worker)).all()
+        producers = session.scalars(select(Producer)).all()
         jobs = session.scalars(select(Job)).all()
         attempts = session.scalars(select(JobAttempt)).all()
         assert (len(users), len(workers), len(jobs), len(attempts)) == (5, 6, 40, 50)
@@ -47,12 +48,30 @@ def test_seed_creates_varied_consistent_data(database, monkeypatch):
         assert authenticate_user(session, "demo_admin", PASSWORD).role == UserRole.ADMIN
         assert authenticate_user(session, "demo_inactive", PASSWORD) is None
         assert {worker.active for worker in workers} == {True, False}
-        assert {worker.permission_policy for worker in workers} == set(WorkerPolicy)
+        assert {worker.permission_policy for worker in workers} == {
+            WorkerPolicy.PRIVATE,
+            WorkerPolicy.PERMITTED_USERS,
+            WorkerPolicy.ALL,
+        }
         assert all(
             worker.secret_api_key_hash == hash_api_key(keys[worker.name])
             for worker in workers
         )
-        assert len(set(keys.values())) == len(workers)
+        assert {
+            producer.name: (producer.user.username, producer.active)
+            for producer in producers
+        } == {
+            "demo_reports": ("demo_alice", True),
+            "demo_imports": ("demo_bob", True),
+            "demo_scheduler": ("demo_carol", True),
+            "demo_disabled": ("demo_alice", False),
+        }
+        assert all(
+            producer.secret_api_key_hash == hash_api_key(keys[producer.name])
+            and producer.secret_api_key_hash != keys[producer.name]
+            for producer in producers
+        )
+        assert len(keys) == len(set(keys.values())) == len(workers) + len(producers)
         assert any(len(worker.supported_types) > 1 for worker in workers)
         assert any(worker.permitted_users for worker in workers)
         assert {job.status for job in jobs} == set(JobStatus)
@@ -166,7 +185,9 @@ def test_cli_seed_rejects_duplicates_without_changing_data(seed_cli, database, c
     seed_cli("seed")
     output = capsys.readouterr().out
     assert "40 jobs" in output
+    assert "4 producers" in output
     assert "demo_math: oqb_" in output
+    assert "demo_reports: oqb_" in output
     assert PASSWORD not in output
     with Session(database) as session:
         before = table_counts(session)
@@ -184,6 +205,7 @@ def test_cli_reset_and_clear(seed_cli, database, user, monkeypatch):
         assert session.get(User, user.id) is None
         assert session.scalar(select(func.count()).select_from(Job)) == 40
         assert session.scalar(select(func.count()).select_from(JobAttempt)) == 50
+        assert session.scalar(select(func.count()).select_from(Producer)) == 4
     monkeypatch.delenv("ORQBIT_DEMO_PASSWORD")
     seed_cli("clear")
     with Session(database) as session:
@@ -202,6 +224,9 @@ def test_failed_reset_rolls_back_deletions_and_partial_seed(
         before = table_counts(session)
         original_ids = set(session.scalars(select(Job.id)))
         original_keys = set(session.scalars(select(Worker.secret_api_key_hash)))
+        original_producer_keys = set(
+            session.scalars(select(Producer.secret_api_key_hash))
+        )
 
     real_seed = seed.seed_data
 
@@ -218,6 +243,10 @@ def test_failed_reset_rolls_back_deletions_and_partial_seed(
         assert table_counts(session) == before
         assert set(session.scalars(select(Job.id))) == original_ids
         assert set(session.scalars(select(Worker.secret_api_key_hash))) == original_keys
+        assert (
+            set(session.scalars(select(Producer.secret_api_key_hash)))
+            == original_producer_keys
+        )
 
 
 @pytest.mark.parametrize("password", [None, "invalid"])
