@@ -1,6 +1,6 @@
 # Your first job with Orqbit
 
-[All tutorials](../README.md) · [Build a worker with leases and heartbeats](../worker-leases-and-heartbeats/README.md)
+[All tutorials](../README.md) · [Build a worker with leases and heartbeats](../worker-leases-and-heartbeats/README.md) · [Build a producer](../build-a-producer/README.md)
 
 Welcome! This tutorial takes you from a fresh installation to a finished job whose result you can read in your browser. You do not need to know FastAPI, databases, or Docker internals.
 
@@ -39,8 +39,12 @@ Submit a job -> Pending -> Running -> Succeeded -> Read the result
 | 6 | [Follow progress and read the result](06-progress-and-results.md) | A saved result, plus an understanding of errors and attempts. |
 | 7, optional | [Create your own worker](07-create-your-own-worker.md) | A small Python worker that greets someone by name. |
 | 8 | [Stop, restart, and solve common problems](08-everyday-use-and-troubleshooting.md) | The commands and checks you will use next time. |
+| 9, optional | [Register a producer](09-register-a-producer.md) | A separate application identity and its producer API key. |
+| 10, optional | [Start your producer](10-start-your-producer.md) | A CLI that submits addition jobs and optionally waits for results. |
 
-Steps 1–6 are the main walkthrough. Step 7 is for readers who want to write a little Python; you can use the supplied workers without doing it.
+Steps 1–6 are the main walkthrough. Step 7 is for readers who want to write a little Python; you can use the supplied workers without doing it. Steps 9–10 show how to submit jobs from a separate **producer program** instead of the browser, using the supplied example. Registration and running the producer are separate steps, just as they are for workers. Keep Orqbit and the addition worker running when trying these optional pages.
+
+To write your own producer, follow [Build an independent producer](../build-a-producer/README.md). It explains the recommended file structure, input validation, HTTP calls, safe submission repetition, and tests.
 
 ## Before you begin
 
