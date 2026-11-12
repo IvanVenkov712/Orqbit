@@ -48,10 +48,11 @@ def get_request_fingerprint(payload: JobCreate) -> str:
 
 
 def create_job(
-    session: Session,
-    user: User,
-    payload: JobCreate,
-    idempotency_key: str,
+        session: Session,
+        user: User,
+        payload: JobCreate,
+        idempotency_key: str,
+        producer: Producer | None = None
 ) -> Job:
     fingerprint = get_request_fingerprint(payload)
     stmt = select(Job).where(

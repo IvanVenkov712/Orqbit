@@ -16,4 +16,5 @@ __all__ = [
     "User",
     "Worker",
     "WorkerPermittedUser",
+    "Producer",
 ]

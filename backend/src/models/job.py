@@ -20,6 +20,7 @@ from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .job_attempts import JobAttempt
+    from .producers import Producer
     from .user import User
     from .worker import Worker
 
@@ -78,7 +79,13 @@ class Job(Base, TimestampMixin):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
     user: Mapped["User"] = relationship(back_populates="jobs")
-    
+
+    producer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("producers.id"), nullable=True, default=None,
+    )
+
+    producer: Mapped["Producer | None"] = relationship(back_populates="jobs")
+
     attempts: Mapped[list["JobAttempt"]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
     )
@@ -98,4 +105,5 @@ class Job(Base, TimestampMixin):
             "attempts_count >= 0 AND attempts_count <= max_attempts",
             name="ck_jobs_attempts_count_within_limit",
         ),
+        
     )

@@ -8,6 +8,7 @@ from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .job import Job
+    from .producers import Producer
     from .worker import Worker
 
 
@@ -35,5 +36,8 @@ class User(Base, TimestampMixin):
         back_populates="user", cascade="all, delete-orphan"
     )
     workers: Mapped[list["Worker"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    producers: Mapped[list["Producer"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
