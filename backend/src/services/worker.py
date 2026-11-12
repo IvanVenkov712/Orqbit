@@ -12,7 +12,7 @@ from dto.worker import (
 from models.supported_types import SupportedJobType
 from models.user import User
 from models.worker import PermissionPolicy, Worker
-from services.worker_auth import generate_api_key, hash_api_key
+from services.api_key_auth import generate_api_key, hash_api_key
 
 
 class WorkerCreationConflict(Exception):
