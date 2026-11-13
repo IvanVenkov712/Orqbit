@@ -1,6 +1,6 @@
 # Frontend roadmap
 
-The current interface includes the sidebar layout, nested parameter editor, accessible jobs/workers across owners, type/owner/date/status filters, URL-persisted sorting and page grouping, lost-attempt views, and producer management (search, registration, key reissue, deactivation, and safe deletion). These are implemented features, not pending milestones. Worker key reissue/type updates/deletion exist in the backend but do not yet have browser controls.
+The current interface includes the sidebar layout, nested parameter editor, accessible jobs/workers across owners, type/owner/date/status filters, URL-persisted sorting and page grouping, lost-attempt views, and producer management (search, registration, key reissue, deactivation, and safe deletion). Worker owners can edit supported types, visibility, and permitted users, reissue API keys, and delete unreferenced registrations. Worker registration and editing include job-type suggestions and searchable permitted-user pickers. These are implemented features, not pending milestones.
 
 ## 1. Retry visibility
 
@@ -27,9 +27,7 @@ The current interface includes the sidebar layout, nested parameter editor, acce
 
 Evaluate as separate increments:
 
-- Optional job-type suggestions using `GET /job-types`.
-- User/grant pickers using `GET /users` and `GET /users/{id}`.
-- Owner-only browser controls for existing worker supported-type updates, key reissue, and deletion, with one-time secret display and conflict feedback.
+- Extend job-type suggestions and searchable grant pickers to job submission.
 - Optional dark mode and further presentation of operational metrics.
 - Controls for manual replay, cancellation, job editing/deletion, worker deactivation, producer reactivation, scheduling, and notifications after their backend contracts are defined.
 

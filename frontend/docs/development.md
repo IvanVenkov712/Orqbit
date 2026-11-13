@@ -79,8 +79,8 @@ The header breadcrumb links to the workspace (Jobs), the current section's list,
 | `/jobs/:jobId/attempts` | Dedicated attempt-history view |
 | `/workers` | Accessible workers from all owners, type/owner/active/date filters, sorting, grouping, pagination, and registration |
 | `/workers/new` | Worker registration and one-time API-key display |
-| `/workers/:workerId` | Worker metadata, supported types, visibility policy, owner-only edit link and API-key reissue |
-| `/workers/:workerId/edit` | Owner-only supported-type, visibility and permitted-user editing, plus API-key reissue |
+| `/workers/:workerId` | Worker metadata, supported types, visibility policy, owner-only edit link, API-key reissue, and deletion when unreferenced |
+| `/workers/:workerId/edit` | Owner-only supported-type, visibility and permitted-user editing, plus API-key reissue and deletion when unreferenced |
 | `/producers` | Your producers, partial/exact name or ID search, and page-size selection |
 | `/producers/new` | Producer registration and one-time API-key display |
 | `/producers/:producerId` | Producer metadata, key reissue, deactivation, and deletion when unreferenced |
@@ -107,6 +107,7 @@ Use the current unversioned contract in the [API reference](../../docs/api.md); 
 | Read worker | `GET /api/workers/{id}` |
 | Edit worker | `PUT /api/workers/{id}`, supported types, visibility policy and optional permitted-user IDs |
 | Reissue worker key | `POST /api/workers/{id}/api-key` |
+| Delete worker | `DELETE /api/workers/{id}` |
 | Find permitted users | `GET /api/users?query=...&limit=10`, `GET /api/users/{id}` |
 | Suggest job types | `GET /api/job-types`, accessible workers' types with optional `query` and `limit` |
 | Register/list producers | `POST /api/producers`, `GET /api/producers` |
@@ -178,7 +179,7 @@ Check actual color combinations against WCAG: normal text needs 4.5:1 contrast a
 - Attempt history includes worker attribution and creation/update timestamps. `updated_at` is not a dedicated finished timestamp. Display timezone information clearly when formatting timestamps.
 - Worker `active` indicates authentication eligibility, not online status. Attempt heartbeats do not provide a separate worker-process liveness signal.
 - Recovery schedules retries for lost attempts while budget remains. A worker-reported failure is terminal. Use [recovery and bounded retries](../../docs/api.md#recovery-and-bounded-retries) when presenting these states.
-- Worker supported-type, visibility and permitted-user updates, plus API-key reissue, have owner-only browser controls. Worker deletion is an implemented API operation but currently lacks a browser control. Producer management includes key reissue, deactivation, and safe deletion in both API and UI.
+- Worker supported-type, visibility and permitted-user updates, API-key reissue, and deletion have owner-only browser controls. Deletion requires confirmation on the details or editing screen; workers referenced by jobs or execution attempts cannot be deleted, and a conflict keeps the registration available. Producer management includes key reissue, deactivation, and safe deletion in both API and UI.
 - Job update/delete, cancellation, manual replay, account management, token refresh, worker deactivation, and producer reactivation have no current endpoints. Add their controls only when backend contracts exist.
 - Client route guards improve navigation; authorization remains enforced by the API.
 
