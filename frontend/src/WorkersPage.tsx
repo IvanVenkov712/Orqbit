@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useParams, useSearchParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { ApiError } from './api/client'
 import { useAuth } from './auth'
 import { Icon } from './Icon'
@@ -23,6 +23,79 @@ type Worker = {
 const pageSize = 20
 const visibilityLabels = { PRIVATE: 'Private', PERMITTED_USERS: 'Permitted users', ALL: 'All users' }
 const credentialHelp = 'Active describes credential/registration status. It does not establish that a worker process is online.'
+const supportedTypesHelp = 'Add exact job types with Enter or the Add button. Choose an existing suggestion or create your own. Each type needs 1–100 characters; spaces and case are preserved.'
+
+function readSupportedTypes(form: FormData) {
+  const types = [...new Set(form.getAll('supported_types').map(String).filter((type) => type !== ''))]
+  if (!types.length || types.some((type) => !type.trim() || type.length > 100)) {
+    const message = 'Add at least one non-blank supported type, each at most 100 characters.'
+    throw new ApiError(message, null, [{ loc: ['supported_types'], msg: message, type: 'value_error' }])
+  }
+  return types
+}
+
+function SupportedTypesInput({ defaultValue = [], error = '' }: { defaultValue?: string[]; error?: string }) {
+  const { user, request } = useAuth()
+  const [types, setTypes] = useState(defaultValue)
+  const [draft, setDraft] = useState('')
+  const [focused, setFocused] = useState(false)
+  const [inputError, setInputError] = useState('')
+  const input = useRef<HTMLInputElement>(null)
+  const suggestions = useQuery({
+    queryKey: ['job-types', user?.id, draft],
+    enabled: !!user && focused && draft.length <= 100,
+    queryFn: ({ signal }) => {
+      const query = new URLSearchParams({ limit: '10' })
+      if (draft) query.set('query', draft)
+      return request<string[]>(`/job-types?${query}`, { signal })
+    },
+  })
+
+  function addType() {
+    if (!draft.trim() || draft.length > 100) {
+      setInputError('Enter a non-blank type of at most 100 characters.')
+      input.current?.focus()
+      return
+    }
+    setTypes((current) => [...new Set([...current, draft])])
+    setDraft('')
+    setInputError('')
+    input.current?.focus()
+  }
+
+  return <div>
+    <label htmlFor="worker-types">Supported types</label>
+    <div className={styles.topicEditor}>
+      {types.length > 0 && <ul className={styles.topicList} aria-label="Selected supported types">
+        {types.map((type) => <li key={type} className={styles.topicTag}>
+          <span>{type}</span><input type="hidden" name="supported_types" value={type} />
+          <button type="button" aria-label={`Remove type ${type}`} onClick={() => {
+            setTypes((current) => current.filter((value) => value !== type))
+            input.current?.focus()
+          }}><Icon name="close" size={13} /></button>
+        </li>)}
+      </ul>}
+      <div className={styles.topicEntry}>
+        <input ref={input} id="worker-types" name="supported_types" value={draft} maxLength={100} autoComplete="off"
+          placeholder="e.g. add_numbers" list="worker-type-suggestions"
+          aria-invalid={!!(inputError || error)} aria-describedby="worker-types-help worker-types-error"
+          onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+          onChange={(event) => { setDraft(event.target.value); setInputError('') }}
+          onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return
+            if (event.key === 'Enter') { event.preventDefault(); addType() }
+            if (event.key === 'Backspace' && !draft) setTypes((current) => current.slice(0, -1))
+          }} />
+        <datalist id="worker-type-suggestions">
+          {suggestions.data?.filter((type) => !types.includes(type)).map((type) => <option key={type} value={type}>{type}</option>)}
+        </datalist>
+        <button type="button" onClick={addType} disabled={!draft.trim()}><Icon name="plus" size={15} />Add</button>
+      </div>
+    </div>
+    <small id="worker-types-help">{supportedTypesHelp}</small>
+    <small id="worker-types-error" role={inputError ? 'alert' : undefined}>{inputError || error}</small>
+  </div>
+}
 const sorts = [
   { value: '', label: 'Newest registered' },
   { value: 'created_desc', label: 'Recently created' }, { value: 'created_asc', label: 'Oldest first' },
@@ -134,7 +207,7 @@ export function WorkersPage() {
   </>
 }
 
-export function WorkerDetailsPage() {
+export function WorkerDetailsPage({ edit = false }: { edit?: boolean }) {
   const { workerId = '' } = useParams()
   const { user, request } = useAuth()
   const validId = /^[1-9]\d*$/.test(workerId) && Number.isSafeInteger(Number(workerId))
@@ -145,11 +218,12 @@ export function WorkerDetailsPage() {
   })
   const worker = details.data
   const unavailable = !validId || (details.error instanceof ApiError && [403, 404].includes(details.error.status ?? 0))
+    || (edit && worker && worker.user_id !== user?.id)
 
   return <>
     <div className={styles.pageHeading}>
       <Link to="/workers">Back to Workers</Link>
-      <h1>Worker details</h1>
+      <h1>{edit ? 'Edit worker' : 'Worker details'}</h1>
     </div>
     {unavailable ? <section className={styles.placeholder}>
       <h2>Worker unavailable</h2>
@@ -157,8 +231,9 @@ export function WorkerDetailsPage() {
     </section> : details.isError ? <section className={styles.placeholder}>
       <p role="alert">{details.error instanceof ApiError ? details.error.message : 'Unable to load this worker.'}</p>
       <button type="button" onClick={() => { void details.refetch() }}>Try again</button>
-    </section> : !worker ? <p role="status">Loading worker details…</p> : <section className={styles.placeholder} aria-label="Worker metadata">
+    </section> : !worker ? <p role="status">Loading worker details…</p> : edit ? <EditWorkerForm key={`${user?.id}:${worker.id}`} worker={worker} /> : <section className={styles.placeholder} aria-label="Worker metadata">
       <h2>{worker.name}</h2>
+      {worker.user_id === user?.id && <Link className={styles.secondaryLink} to={`/workers/${worker.id}/edit`}>Edit worker</Link>}
       <dl className={styles.metadata}>
         <div><dt>Worker ID</dt><dd>#{worker.id}</dd></div>
         <div><dt>Owner</dt><dd>{worker.owner_username}{worker.user_id === user?.id ? ' (you)' : ''}</dd></div>
@@ -171,6 +246,73 @@ export function WorkerDetailsPage() {
       <ul>{worker.supported_types.map((type) => <li key={type}>{type}</li>)}</ul>
     </section>}
   </>
+}
+
+function EditWorkerForm({ worker }: { worker: Worker }) {
+  const { user, request } = useAuth()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [error, setError] = useState<ApiError | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const pending = useRef<AbortController | null>(null)
+  useEffect(() => () => { pending.current?.abort() }, [])
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (pending.current) return
+    const form = new FormData(event.currentTarget)
+    let supportedTypes: string[]
+    try { supportedTypes = readSupportedTypes(form) } catch (cause) { setError(cause as ApiError); return }
+    const controller = new AbortController()
+    pending.current = controller
+    setSubmitting(true)
+    setError(null)
+    try {
+      await request<Worker>(`/workers/${worker.id}`, {
+        method: 'PUT', json: { supported_types: supportedTypes, permission_policy: form.get('permission_policy') },
+        signal: controller.signal,
+      })
+      if (!controller.signal.aborted) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['worker-details', user!.id, String(worker.id)] }),
+          queryClient.invalidateQueries({ queryKey: ['workers', user!.id] }),
+        ])
+        if (!controller.signal.aborted) navigate(`/workers/${worker.id}`)
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted) setError(cause instanceof ApiError ? cause : new ApiError('Unable to update this worker. Please try again.', null))
+    } finally {
+      if (!controller.signal.aborted) { pending.current = null; setSubmitting(false) }
+    }
+  }
+
+  function fieldError(name: string) {
+    return error?.fieldErrors.filter(({ loc }) => loc.includes(name)).map(({ msg }) => msg).join(' ')
+  }
+
+  return <section className={styles.placeholder} aria-label="Worker editing">
+    <h2>{worker.name}</h2>
+    <p>Edit the job types this worker can execute and who can view its metadata.</p>
+    {error && <div className={styles.formError} role="alert">{error.message}</div>}
+    <form onSubmit={submit} aria-label="Edit worker" aria-busy={submitting}>
+      <fieldset className={styles.authFields} disabled={submitting}>
+        <div><label htmlFor="worker-name">Worker name</label><input id="worker-name" value={worker.name} readOnly aria-describedby="worker-name-help" />
+          <small id="worker-name-help">Worker names cannot be changed through the current API.</small></div>
+        <SupportedTypesInput defaultValue={worker.supported_types} error={fieldError('supported_types')} />
+        <div>
+          <label htmlFor="worker-policy">Visibility policy</label>
+          <select id="worker-policy" name="permission_policy" defaultValue={worker.permission_policy}
+            aria-invalid={!!fieldError('permission_policy')} aria-describedby="worker-policy-help worker-policy-error">
+            {Object.entries(visibilityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <small id="worker-policy-help">Private: only you. Permitted users: you and existing user grants ({worker.permitted_user_ids.join(', ') || 'none'}). All users: any authenticated user. Existing user grants cannot be edited through the current API. Visibility does not allow others to claim as this worker.</small>
+          <small id="worker-policy-error">{fieldError('permission_policy')}</small>
+        </div>
+        <button type="submit">{submitting ? 'Saving…' : 'Save changes'}</button>
+      </fieldset>
+      <Link to={`/workers/${worker.id}`}>Cancel</Link>
+    </form>
+  </section>
 }
 
 export function RegisterWorkerPage() {
@@ -190,19 +332,14 @@ export function RegisterWorkerPage() {
     if (pending.current || created) return
     const form = new FormData(event.currentTarget)
     const name = String(form.get('name') ?? '')
-    const supportedTypes = [...new Set(String(form.get('supported_types') ?? '').split(/\r?\n/))]
     if (!/^[a-zA-Z0-9_-]{3,16}$/.test(name)) {
       setError(new ApiError('Choose a name of 3–16 letters, digits, underscores or hyphens.', null, [
         { loc: ['name'], msg: 'Use 3–16 letters, digits, underscores or hyphens.', type: 'value_error' },
       ]))
       return
     }
-    if (supportedTypes.some((type) => !type.trim() || type.length > 100)) {
-      setError(new ApiError('Enter one non-blank supported type per line, each at most 100 characters.', null, [
-        { loc: ['supported_types'], msg: 'Remove blank lines and keep each type within 100 characters.', type: 'value_error' },
-      ]))
-      return
-    }
+    let supportedTypes: string[]
+    try { supportedTypes = readSupportedTypes(form) } catch (cause) { setError(cause as ApiError); return }
     let permittedUserIds: number[] | undefined
     if (policy === 'PERMITTED_USERS') {
       const input = String(form.get('permitted_user_ids') ?? '').trim()
@@ -286,13 +423,7 @@ export function RegisterWorkerPage() {
               <small id="worker-name-help">3–16 letters, digits, underscores or hyphens. Names must be unique.</small>
               <small id="worker-name-error">{fieldError('name')}</small>
             </div>
-            <div>
-              <label htmlFor="worker-types">Supported types</label>
-              <textarea id="worker-types" name="supported_types" required rows={4}
-                aria-invalid={!!fieldError('supported_types')} aria-describedby="worker-types-help worker-types-error" />
-              <small id="worker-types-help">One exact job type per line, for example add_numbers. Each type needs 1–100 characters. Spaces are preserved.</small>
-              <small id="worker-types-error">{fieldError('supported_types')}</small>
-            </div>
+            <SupportedTypesInput error={fieldError('supported_types')} />
             <div>
               <label htmlFor="worker-policy">Visibility policy</label>
               <select id="worker-policy" name="permission_policy" value={policy}

@@ -2,7 +2,7 @@
 import { act, fireEvent, screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import {
-  fetchMock, storageKey, worker, response, enterApp, fillJob, submitJob, fillWorkerRegistration, setupAppTests,
+  fetchMock, storageKey, worker, response, enterApp, fillJob, submitJob, fillWorkerRegistration, mockApi, setupAppTests,
 } from './app-test-utils'
 
 setupAppTests()
@@ -117,7 +117,8 @@ test.each(['job users', 'job workers', 'worker users'])('validates positive IDs 
     expect(fetchMock.mock.calls.some(([path]) => path === (registering ? '/api/workers' : '/api/jobs/'))).toBe(false)
   }
   fireEvent.change(ids, { target: { value: '12, 15' } })
-  fetchMock.mockResolvedValueOnce(response(registering ? { ...worker, secret_api_key: 'new-key' } : { id: 42 }))
+  mockApi(async (path) => path === (registering ? '/api/workers' : '/api/jobs/')
+    ? response(registering ? { ...worker, secret_api_key: 'new-key' } : { id: 42 }) : undefined)
   if (registering) fillWorkerRegistration()
   else submitJob()
   await screen.findByRole('heading', { name: registering ? `${worker.name} registered` : 'Job details' })
@@ -133,7 +134,8 @@ test.each([
   if (!registering) fillJob({})
   fireEvent.change(screen.getByLabelText(registering ? 'Visibility policy' : 'Access policy'), { target: { value: policy } })
   fireEvent.change(screen.getByLabelText(label), { target: { value: '99999' } })
-  fetchMock.mockResolvedValueOnce(response({ detail: message }, 422))
+  mockApi(async (path) => path === (registering ? '/api/workers' : '/api/jobs/')
+    ? response({ detail: message }, 422) : undefined)
   if (registering) fillWorkerRegistration()
   else submitJob()
   expect((await screen.findByRole('alert')).textContent).toBe(message)
@@ -141,7 +143,8 @@ test.each([
   expect(screen.queryByText(/may have succeeded|may already have been created/)).toBeNull()
   if (!registering) fireEvent.click(screen.getByRole('button', { name: 'Start a new submission' }))
   fireEvent.change(screen.getByLabelText(label), { target: { value: '12' } })
-  fetchMock.mockResolvedValueOnce(response(registering ? { ...worker, secret_api_key: 'new-key' } : { id: 42 }))
+  mockApi(async (path) => path === (registering ? '/api/workers' : '/api/jobs/')
+    ? response(registering ? { ...worker, secret_api_key: 'new-key' } : { id: 42 }) : undefined)
   if (registering) fillWorkerRegistration()
   else submitJob()
   await screen.findByRole('heading', { name: registering ? `${worker.name} registered` : 'Job details' })
@@ -156,7 +159,8 @@ test.each(['jobs', 'workers'])('shows backend grant validation errors beside %s 
   if (!registering) fillJob({})
   fireEvent.change(screen.getByLabelText(registering ? 'Visibility policy' : 'Access policy'), { target: { value: 'PERMITTED_USERS' } })
   fireEvent.change(screen.getByLabelText('Permitted user IDs'), { target: { value: '12' } })
-  fetchMock.mockResolvedValueOnce(response({ detail: [{ loc: ['body', 'permitted_user_ids', 0], msg: 'Invalid user ID', type: 'value_error' }] }, 422))
+  mockApi(async (path) => path === (registering ? '/api/workers' : '/api/jobs/')
+    ? response({ detail: [{ loc: ['body', 'permitted_user_ids', 0], msg: 'Invalid user ID', type: 'value_error' }] }, 422) : undefined)
   if (registering) fillWorkerRegistration()
   else submitJob()
   expect((await screen.findByRole('alert')).textContent).toContain('Invalid user ID')
@@ -193,7 +197,8 @@ test.each(['jobs', 'workers'])('accepts empty applicable grants for %s', async (
   fireEvent.change(screen.getByLabelText(registering ? 'Visibility policy' : 'Access policy'), {
     target: { value: registering ? 'PERMITTED_USERS' : 'PERMITTED_WORKERS_AND_USERS' },
   })
-  fetchMock.mockResolvedValueOnce(response(registering ? { ...worker, secret_api_key: 'new-key' } : { id: 42 }))
+  mockApi(async (path) => path === (registering ? '/api/workers' : '/api/jobs/')
+    ? response(registering ? { ...worker, secret_api_key: 'new-key' } : { id: 42 }) : undefined)
   if (registering) fillWorkerRegistration()
   else submitJob()
   await screen.findByRole('heading', { name: registering ? `${worker.name} registered` : 'Job details' })

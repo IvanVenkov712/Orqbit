@@ -403,6 +403,7 @@ function App() {
               <Route path="workers" element={<WorkersPage />} />
               <Route path="workers/new" element={<RegisterWorkerPage />} />
               <Route path="workers/:workerId" element={<WorkerDetailsPage />} />
+              <Route path="workers/:workerId/edit" element={<WorkerDetailsPage edit />} />
               <Route path="producers" element={<ProducersPage />} />
               <Route path="producers/new" element={<CreateProducerPage />} />
               <Route path="producers/:producerId" element={<ProducerDetailsPage />} />

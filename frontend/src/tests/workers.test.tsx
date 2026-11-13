@@ -37,6 +37,7 @@ test('opens an accessible worker belonging to another owner without exposing cre
   expect(details.textContent).not.toContain('User #888')
   expect(details.textContent).not.toContain('demo-user (you)')
   expect(details.textContent).not.toContain('never-show-key')
+  expect(screen.queryByRole('link', { name: 'Edit worker' })).toBeNull()
 })
 
 test('combines worker owner, type, registration status and creation filters before pagination', async () => {
@@ -260,7 +261,8 @@ test.each([
   expect(description).toContain(`Worker metadata visibility: ${help}`)
   expect(description).toContain('does not reveal the API key or allow others to claim as this worker')
   expect(description).toContain('Job access policies determine which jobs it can claim.')
-  fetchMock.mockResolvedValueOnce(response({ ...worker, secret_api_key: 'new-key' }))
+  mockApi(async (path, options) => path === '/api/workers' && options?.method === 'POST'
+    ? response({ ...worker, secret_api_key: 'new-key' }) : undefined)
   fillWorkerRegistration()
   await screen.findByLabelText('New worker API key')
   const [, options] = fetchMock.mock.calls.find(([path]) => path === '/api/workers')!
@@ -305,16 +307,16 @@ test('makes duplicate worker names actionable and allows correcting the name', a
   fillWorkerRegistration()
   expect((await screen.findByRole('alert')).textContent).toContain('Choose a different name')
   expect(screen.getByLabelText('Worker name').getAttribute('aria-invalid')).toBe('true')
-  expect((screen.getByLabelText('Supported types') as HTMLTextAreaElement).value).toContain('sum')
+  expect(screen.getByRole('list', { name: 'Selected supported types' }).textContent).toContain('sum')
   fireEvent.change(screen.getByLabelText('Worker name'), { target: { value: 'another-worker' } })
   fireEvent.submit(screen.getByRole('form', { name: 'Register a worker' }))
   expect(await screen.findByRole('heading', { name: 'another-worker registered' })).toBeTruthy()
 })
 
-test.each(['', '  ', 'add_numbers\n', 'a'.repeat(101)])('rejects invalid supported types %j before registration', async (types) => {
+test.each(['', '  ', 'a'.repeat(101)])('rejects invalid supported types %j before registration', async (types) => {
   await enterApp('/workers/new')
   fillWorkerRegistration(types)
-  expect(screen.getByRole('alert').textContent).toContain('one non-blank supported type per line')
+  expect(screen.getByRole('alert').textContent).toContain('at least one non-blank supported type')
   expect(screen.queryByText(/registration may have succeeded/)).toBeNull()
   expect(screen.getByLabelText('Supported types').getAttribute('aria-invalid')).toBe('true')
   expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers')).toBe(false)
@@ -390,4 +392,172 @@ test('discards worker records across accounts', async () => {
   fillLogin()
   await screen.findByRole('heading', { name: 'Worker unavailable' })
   expect(screen.queryByRole('region', { name: 'Worker metadata' })).toBeNull()
+})
+
+test('adds and removes supported-type tags without submitting, preserving exact values and removing duplicates', async () => {
+  mockApi(async (path, options) => path === '/api/workers' && options?.method === 'POST'
+    ? response({ ...worker, secret_api_key: 'new-key' }) : undefined)
+  await enterApp('/workers/new')
+  const input = screen.getByLabelText('Supported types')
+  fireEvent.change(screen.getByLabelText('Worker name'), { target: { value: worker.name } })
+  for (const type of ['sum', 'sum', ' Sum with spaces ']) {
+    fireEvent.change(input, { target: { value: type } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+  }
+  const tags = screen.getByRole('list', { name: 'Selected supported types' })
+  expect(within(tags).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['sum', ' Sum with spaces '])
+  expect(fetchMock.mock.calls.some(([path]) => path === '/api/workers')).toBe(false)
+  fireEvent.keyDown(input, { key: 'Backspace' })
+  expect(within(tags).getAllByRole('listitem')).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Remove type sum' }))
+  expect(screen.queryByRole('list', { name: 'Selected supported types' })).toBeNull()
+  fireEvent.change(input, { target: { value: 'custom_type' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+  expect((input as HTMLInputElement).value).toBe('')
+  fireEvent.submit(screen.getByRole('form', { name: 'Register a worker' }))
+  await screen.findByLabelText('New worker API key')
+  const [, options] = fetchMock.mock.calls.find(([path]) => path === '/api/workers')!
+  expect(JSON.parse(String(options?.body)).supported_types).toEqual(['custom_type'])
+})
+
+test('suggests accessible types with an encoded query and allows new types when suggestions fail', async () => {
+  mockApi(async (path, options) => {
+    if (String(path).startsWith('/api/job-types?')) {
+      const query = new URL(String(path), 'http://localhost').searchParams
+      return query.get('query') === 'sum & more' ? response(['sum & more']) : response({}, 503)
+    }
+    if (path === '/api/workers' && options?.method === 'POST') return response({ ...worker, secret_api_key: 'new-key' })
+  })
+  await enterApp('/workers/new')
+  const input = screen.getByLabelText('Supported types')
+  fireEvent.focus(input)
+  fireEvent.change(input, { target: { value: 'sum & more' } })
+  await screen.findByRole('option', { name: 'sum & more', hidden: true })
+  const [, options] = fetchMock.mock.calls.find(([path]) => String(path) === '/api/job-types?limit=10&query=sum+%26+more')!
+  expect(new Headers(options?.headers).get('Authorization')).toMatch(/^Bearer /)
+  fireEvent.change(input, { target: { value: 'brand_new_type' } })
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path === '/api/job-types?limit=10&query=brand_new_type')).toBe(true))
+  fireEvent.change(screen.getByLabelText('Worker name'), { target: { value: worker.name } })
+  fireEvent.submit(screen.getByRole('form', { name: 'Register a worker' }))
+  await screen.findByLabelText('New worker API key')
+  const [, created] = fetchMock.mock.calls.find(([path]) => path === '/api/workers')!
+  expect(JSON.parse(String(created?.body)).supported_types).toEqual(['brand_new_type'])
+})
+
+test('edits owned worker types and visibility and refreshes details and cached lists', async () => {
+  let current = { ...worker }
+  mockApi(async (path, options) => {
+    if (path === '/api/workers/17' && options?.method === 'PUT') {
+      current = { ...current, ...JSON.parse(String(options.body)) }
+      return response(current)
+    }
+    if (path === '/api/workers/17') return response(current)
+    if (String(path).startsWith('/api/workers?')) return response([current])
+  })
+  await enterApp('/workers')
+  fireEvent.click(await screen.findByRole('link', { name: worker.name }))
+  fireEvent.click(await screen.findByRole('link', { name: 'Edit worker' }))
+  const form = await screen.findByRole('form', { name: 'Edit worker' })
+  expect(window.location.pathname).toBe('/workers/17/edit')
+  expect((screen.getByLabelText('Worker name') as HTMLInputElement).readOnly).toBe(true)
+  expect(within(screen.getByRole('list', { name: 'Selected supported types' })).getAllByRole('listitem').map((item) => item.textContent)).toEqual(worker.supported_types)
+  fireEvent.click(screen.getByRole('button', { name: 'Remove type sum' }))
+  fireEvent.change(screen.getByLabelText('Supported types'), { target: { value: ' CSV summary ' } })
+  fireEvent.change(screen.getByLabelText('Visibility policy'), { target: { value: 'ALL' } })
+  fireEvent.submit(form)
+  const details = await screen.findByRole('region', { name: 'Worker metadata' })
+  expect(window.location.pathname).toBe('/workers/17')
+  expect(details.textContent).toContain('All users')
+  expect(within(details).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['add_numbers', ' CSV summary '])
+  const [, options] = fetchMock.mock.calls.find(([, options]) => options?.method === 'PUT')!
+  expect(JSON.parse(String(options?.body))).toEqual({ supported_types: ['add_numbers', ' CSV summary '], permission_policy: 'ALL' })
+  expect(new Headers(options?.headers).get('Authorization')).toMatch(/^Bearer /)
+  fireEvent.click(screen.getByRole('link', { name: 'Back to Workers' }))
+  const table = await screen.findByRole('table', { name: 'Registered workers' })
+  await waitFor(() => expect(table.textContent).toContain('CSV summary'))
+  expect(table.textContent).toContain('All users')
+  expect(table.textContent).not.toContain('add_numbers, sum')
+})
+
+test('cancels an edit without changing the worker', async () => {
+  await enterApp('/workers/17/edit')
+  await screen.findByRole('form', { name: 'Edit worker' })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove type sum' }))
+  fireEvent.change(screen.getByLabelText('Visibility policy'), { target: { value: 'ALL' } })
+  fireEvent.click(screen.getByRole('link', { name: 'Cancel' }))
+  const details = await screen.findByRole('region', { name: 'Worker metadata' })
+  expect(within(details).getAllByRole('listitem').map((item) => item.textContent)).toEqual(worker.supported_types)
+  expect(details.textContent).toContain('Private')
+  expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false)
+})
+
+test.each(['shared', 'missing', 'invalid'])('blocks editing a %s worker', async (kind) => {
+  mockApi(async (path) => path === '/api/workers/17'
+    ? kind === 'shared' ? response({ ...worker, user_id: 888 }) : response({ detail: 'Worker not found' }, 404)
+    : undefined)
+  await enterApp(kind === 'invalid' ? '/workers/invalid/edit' : '/workers/17/edit')
+  await screen.findByRole('heading', { name: 'Worker unavailable' })
+  expect(screen.queryByRole('form', { name: 'Edit worker' })).toBeNull()
+  expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false)
+  if (kind === 'invalid') expect(fetchMock.mock.calls.some(([path]) => String(path).startsWith('/api/workers'))).toBe(false)
+})
+
+test('requires at least one type when editing', async () => {
+  await enterApp('/workers/17/edit')
+  const form = await screen.findByRole('form', { name: 'Edit worker' })
+  for (const type of worker.supported_types) fireEvent.click(screen.getByRole('button', { name: `Remove type ${type}` }))
+  fireEvent.submit(form)
+  expect(screen.getByRole('alert').textContent).toContain('at least one non-blank supported type')
+  expect(screen.getByLabelText('Supported types').getAttribute('aria-invalid')).toBe('true')
+  expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false)
+})
+
+test.each([422, 503])('preserves an edit after HTTP %s and allows manual retry', async (status) => {
+  let failed = false
+  let saved = false
+  mockApi(async (path, options) => {
+    if (path === '/api/workers/17' && options?.method === 'PUT') {
+      if (!failed) {
+        failed = true
+        return response(status === 422 ? { detail: [{ loc: ['body', 'supported_types', 0], msg: 'Unsupported value', type: 'value_error' }] } : {}, status)
+      }
+      saved = true
+      return response({ ...worker, supported_types: ['add_numbers', 'sum', 'custom'] })
+    }
+    if (path === '/api/workers/17' && saved) return response({ ...worker, supported_types: ['add_numbers', 'sum', 'custom'] })
+  })
+  await enterApp('/workers/17/edit')
+  const form = await screen.findByRole('form', { name: 'Edit worker' })
+  fireEvent.change(screen.getByLabelText('Supported types'), { target: { value: 'custom' } })
+  fireEvent.submit(form)
+  expect((await screen.findByRole('alert')).textContent).toContain(status === 422 ? 'Unsupported value' : 'temporarily unavailable')
+  if (status === 422) expect(document.getElementById('worker-types-error')?.textContent).toBe('Unsupported value')
+  expect((screen.getByLabelText('Supported types') as HTMLInputElement).value).toBe('custom')
+  expect(screen.getByRole('list', { name: 'Selected supported types' }).children).toHaveLength(2)
+  expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'PUT')).toHaveLength(1)
+  fireEvent.submit(form)
+  const details = await screen.findByRole('region', { name: 'Worker metadata' })
+  expect(details.textContent).toContain('custom')
+  const requests = fetchMock.mock.calls.filter(([, options]) => options?.method === 'PUT')
+  expect(requests).toHaveLength(2)
+  expect(requests[0][1]?.body).toBe(requests[1][1]?.body)
+})
+
+test.each(['navigate', 'logout'])('prevents duplicate edits and cancels pending save on %s', async (action) => {
+  let resolve!: (value: Response) => void
+  mockApi(async (path, options) => path === '/api/workers/17' && options?.method === 'PUT'
+    ? new Promise((done) => { resolve = done }) : undefined)
+  await enterApp('/workers/17/edit')
+  const form = await screen.findByRole('form', { name: 'Edit worker' })
+  fireEvent.submit(form)
+  expect((screen.getByRole('button', { name: 'Saving…' }) as HTMLButtonElement).matches(':disabled')).toBe(true)
+  fireEvent.submit(form)
+  const updates = fetchMock.mock.calls.filter(([, options]) => options?.method === 'PUT')
+  expect(updates).toHaveLength(1)
+  if (action === 'navigate') fireEvent.click(screen.getByRole('link', { name: 'Back to Workers' }))
+  else fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+  expect(updates[0][1]?.signal?.aborted).toBe(true)
+  await act(async () => { resolve(response(worker)) })
+  expect(window.location.pathname).toBe(action === 'navigate' ? '/workers' : '/login')
+  expect(screen.queryByRole('form', { name: 'Edit worker' })).toBeNull()
 })

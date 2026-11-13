@@ -42,6 +42,7 @@ export function setupAppTests() {
       if (/^\/api\/jobs\/\d+$/.test(String(path))) return response(job)
       if (String(path).startsWith('/api/jobs/42/attempts?')) return response([attempt])
       if (String(path).startsWith('/api/workers?')) return response([worker])
+      if (String(path).startsWith('/api/job-types?')) return response(['add_numbers', 'sum'])
       if (/^\/api\/workers\/\d+$/.test(String(path))) return response(worker)
       throw new Error('Unexpected request')
     })
@@ -105,7 +106,11 @@ export function submitJob() {
 
 export function fillWorkerRegistration(types = 'add_numbers\nsum\nadd_numbers') {
   fireEvent.change(screen.getByLabelText('Worker name'), { target: { value: worker.name } })
-  fireEvent.change(screen.getByLabelText('Supported types'), { target: { value: types } })
+  for (const type of types.split('\n')) {
+    const input = screen.getByLabelText('Supported types')
+    fireEvent.change(input, { target: { value: type } })
+    if (type.trim() && type.length <= 100) fireEvent.keyDown(input, { key: 'Enter' })
+  }
   fireEvent.submit(screen.getByRole('form', { name: 'Register a worker' }))
 }
 
