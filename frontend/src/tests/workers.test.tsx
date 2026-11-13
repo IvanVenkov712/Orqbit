@@ -39,6 +39,7 @@ test('opens an accessible worker belonging to another owner without exposing cre
   expect(details.textContent).not.toContain('never-show-key')
   expect(screen.queryByRole('link', { name: 'Edit worker' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Reissue API key' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Delete worker' })).toBeNull()
 })
 
 test('combines worker owner, type, registration status and creation filters before pagination', async () => {
@@ -723,6 +724,92 @@ test('preserves user tags after rejected worker updates and shows field validati
   expect(document.getElementById('worker-user-ids-error')?.textContent).toBe('Invalid user ID')
   expect(await screen.findByRole('button', { name: 'Remove alex' })).toBeTruthy()
   expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'PUT')).toHaveLength(1)
+})
+
+test.each(['/workers/17', '/workers/17/edit'])('deletes a worker only after confirmation and refreshes the cached directory from %s', async (route) => {
+  let deleted = false
+  mockApi(async (path, options) => {
+    if (path === '/api/workers/17' && options?.method === 'DELETE') {
+      deleted = true
+      return new Response(null, { status: 204 })
+    }
+    if (String(path).startsWith('/api/workers?')) return response(deleted ? [] : [worker])
+    if (deleted && path === '/api/workers/17') return response({ detail: 'Worker not found' }, 404)
+  })
+  await enterApp('/workers')
+  fireEvent.click(await screen.findByRole('link', { name: worker.name }))
+  await screen.findByRole('region', { name: 'Worker metadata' })
+  if (route.endsWith('/edit')) fireEvent.click(screen.getByRole('link', { name: 'Edit worker' }))
+  const remove = await screen.findByRole('button', { name: 'Delete worker' })
+  fireEvent.click(remove)
+  expect(screen.getByText(/permanently deletes the worker registration/)).toBeTruthy()
+  expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'DELETE')).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel deletion' }))
+  expect(screen.queryByRole('region', { name: 'Confirm worker deletion' })).toBeNull()
+  expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'DELETE')).toBe(false)
+  fireEvent.click(remove)
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm deletion' }))
+  await screen.findByText('No accessible workers match these filters.')
+  expect(window.location.pathname).toBe('/workers')
+  expect(screen.queryByRole('link', { name: worker.name })).toBeNull()
+  const requests = fetchMock.mock.calls.filter(([, options]) => options?.method === 'DELETE')
+  expect(requests).toHaveLength(1)
+  expect(requests[0][0]).toBe('/api/workers/17')
+  expect(new Headers(requests[0][1]?.headers).get('Authorization')).toMatch(/^Bearer /)
+})
+
+test('keeps the worker available when deletion conflicts with jobs or attempts', async () => {
+  mockApi(async (path, options) => path === '/api/workers/17' && options?.method === 'DELETE'
+    ? response({ detail: 'Worker is referenced by jobs or attempts' }, 409) : undefined)
+  await enterApp('/workers/17')
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete worker' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm deletion' }))
+  expect((await screen.findByRole('alert')).textContent).toContain('referenced by jobs or execution attempts and cannot be deleted')
+  expect(window.location.pathname).toBe('/workers/17')
+  expect(screen.getByRole('region', { name: 'Worker metadata' }).textContent).toContain(worker.name)
+  expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(1)
+})
+
+test.each(['network', 'server'])('explains uncertain worker deletion after a %s failure without retrying', async (failure) => {
+  mockApi(async (path, options) => {
+    if (path === '/api/workers/17' && options?.method === 'DELETE') {
+      if (failure === 'network') throw new Error('private diagnostics')
+      return response({}, 503)
+    }
+  })
+  await enterApp('/workers/17')
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete worker' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm deletion' }))
+  await screen.findByRole('alert')
+  expect(screen.getByText(/worker may have been deleted/)).toBeTruthy()
+  expect(document.body.textContent).not.toContain('private diagnostics')
+  expect(window.location.pathname).toBe('/workers/17')
+  expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(1)
+})
+
+test.each(['navigate', 'logout'])('prevents duplicate worker deletions and ignores a late response after %s', async (action) => {
+  let resolve!: (value: Response) => void
+  mockApi(async (path, options) => path === '/api/workers/17' && options?.method === 'DELETE'
+    ? new Promise((done) => { resolve = done }) : undefined)
+  await enterApp('/workers/17')
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete worker' }))
+  const confirm = screen.getByRole('button', { name: 'Confirm deletion' })
+  fireEvent.click(confirm)
+  fireEvent.click(confirm)
+  const requests = fetchMock.mock.calls.filter(([, options]) => options?.method === 'DELETE')
+  expect(requests).toHaveLength(1)
+  expect((screen.getByRole('button', { name: 'Deleting…' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Reissue API key' }) as HTMLButtonElement).disabled).toBe(true)
+  if (action === 'navigate') {
+    fireEvent.click(screen.getByRole('link', { name: 'Back to Workers' }))
+    await screen.findByRole('link', { name: 'Jobs' })
+    fireEvent.click(screen.getByRole('link', { name: 'Jobs' }))
+    await screen.findByRole('heading', { level: 1, name: 'Jobs' })
+  } else fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+  expect(requests[0][1]?.signal?.aborted).toBe(true)
+  const location = window.location.pathname
+  await act(async () => { resolve(new Response(null, { status: 204 })) })
+  expect(window.location.pathname).toBe(location)
 })
 
 test.each(['/workers/17', '/workers/17/edit'])('reissues a worker key with confirmation and one-time display at %s', async (route) => {

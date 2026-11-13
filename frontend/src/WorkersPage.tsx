@@ -350,14 +350,16 @@ export function WorkerDetailsPage({ edit = false }: { edit?: boolean }) {
       <ul>{worker.supported_types.map((type) => <li key={type}>{type}</li>)}</ul>
     </section>}
     {!unavailable && worker && worker.user_id === user?.id && <div className={styles.actions}>
-      <WorkerApiKey key={`${user?.id}:${worker.id}:${edit}`} workerId={worker.id} />
+      <WorkerManagement key={`${user?.id}:${worker.id}:${edit}`} workerId={worker.id} />
     </div>}
   </>
 }
 
-function WorkerApiKey({ workerId }: { workerId: number }) {
-  const { request } = useAuth()
-  const [confirming, setConfirming] = useState(false)
+function WorkerManagement({ workerId }: { workerId: number }) {
+  const { user, request } = useAuth()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [action, setAction] = useState<'api-key' | 'delete' | null>(null)
   const [busy, setBusy] = useState(false)
   const [secret, setSecret] = useState<string | null>(null)
   const [error, setError] = useState<ApiError | null>(null)
@@ -365,8 +367,8 @@ function WorkerApiKey({ workerId }: { workerId: number }) {
   const pending = useRef<AbortController | null>(null)
   useEffect(() => () => { pending.current?.abort() }, [])
 
-  async function reissue() {
-    if (pending.current) return
+  async function confirm() {
+    if (!action || pending.current) return
     const controller = new AbortController()
     pending.current = controller
     setBusy(true)
@@ -374,11 +376,21 @@ function WorkerApiKey({ workerId }: { workerId: number }) {
     setCopyStatus('')
     setError(null)
     try {
-      const result = await request<{ secret_api_key: string }>(`/workers/${workerId}/api-key`, { method: 'POST', signal: controller.signal })
-      if (typeof result?.secret_api_key !== 'string' || !result.secret_api_key) throw new ApiError('Orqbit returned an invalid API key response.', null)
-      if (!controller.signal.aborted) { setSecret(result.secret_api_key); setConfirming(false) }
+      if (action === 'delete') {
+        await request<void>(`/workers/${workerId}`, { method: 'DELETE', signal: controller.signal })
+        if (!controller.signal.aborted) {
+          void queryClient.invalidateQueries({ queryKey: ['workers', user!.id] })
+          void queryClient.invalidateQueries({ queryKey: ['job-types', user!.id] })
+          queryClient.removeQueries({ queryKey: ['worker-details', user!.id, String(workerId)], exact: true })
+          navigate('/workers', { replace: true })
+        }
+      } else {
+        const result = await request<{ secret_api_key: string }>(`/workers/${workerId}/api-key`, { method: 'POST', signal: controller.signal })
+        if (typeof result?.secret_api_key !== 'string' || !result.secret_api_key) throw new ApiError('Orqbit returned an invalid API key response.', null)
+        if (!controller.signal.aborted) { setSecret(result.secret_api_key); setAction(null) }
+      }
     } catch (cause) {
-      if (!controller.signal.aborted) setError(cause instanceof ApiError ? cause : new ApiError('Unable to reissue this API key. Please try again.', null))
+      if (!controller.signal.aborted) setError(cause instanceof ApiError ? cause : new ApiError('Unable to update this worker. Please try again.', null))
     } finally {
       if (!controller.signal.aborted) { pending.current = null; setBusy(false) }
     }
@@ -390,20 +402,28 @@ function WorkerApiKey({ workerId }: { workerId: number }) {
     catch { setCopyStatus('Unable to copy. Select the API key above and copy it manually.') }
   }
 
-  return <section className={styles.placeholder} aria-label="Worker API key management" aria-busy={busy}>
-    <h2>Worker API key</h2>
-    <p>Reissue the key if you need new credentials for this worker.</p>
-    <button type="button" disabled={busy} onClick={() => { setConfirming(true); setError(null) }}>Reissue API key</button>
-    {confirming && <section aria-label="Confirm worker key reissue">
-      <h3>Reissue API key?</h3>
-      <p>The old key will stop working immediately. Update your independent worker's configuration with the new key. Reissuing does not reactivate an inactive worker.</p>
+  return <section className={styles.placeholder} aria-label="Worker management" aria-busy={busy}>
+    <h2>Manage worker</h2>
+    <p>Reissue the key if you need new credentials, or delete this worker registration.</p>
+    <div className={styles.actions}>
+      <button type="button" disabled={busy} onClick={() => { setAction('api-key'); setError(null) }}>Reissue API key</button>
+      <button type="button" disabled={busy} onClick={() => { setAction('delete'); setError(null); setSecret(null) }}>Delete worker</button>
+    </div>
+    {action && <section aria-label={action === 'delete' ? 'Confirm worker deletion' : 'Confirm worker key reissue'}>
+      <h3>{action === 'delete' ? 'Delete worker?' : 'Reissue API key?'}</h3>
+      <p>{action === 'delete'
+        ? 'This permanently deletes the worker registration and invalidates its API key. Workers referenced by jobs or execution attempts cannot be deleted.'
+        : "The old key will stop working immediately. Update your independent worker's configuration with the new key. Reissuing does not reactivate an inactive worker."}</p>
       <div className={styles.actions}>
-        <button type="button" disabled={busy} onClick={() => { void reissue() }}>{busy ? 'Reissuing…' : 'Confirm reissue'}</button>
-        <button type="button" className={styles.controlButton} disabled={busy} onClick={() => { setConfirming(false); setError(null) }}>Cancel reissue</button>
+        <button type="button" disabled={busy} onClick={() => { void confirm() }}>{action === 'delete' ? busy ? 'Deleting…' : 'Confirm deletion' : busy ? 'Reissuing…' : 'Confirm reissue'}</button>
+        <button type="button" className={styles.controlButton} disabled={busy} onClick={() => { setAction(null); setError(null) }}>{action === 'delete' ? 'Cancel deletion' : 'Cancel reissue'}</button>
       </div>
     </section>}
-    {error && <p className={styles.formError} role="alert">{error.message}</p>}
-    {error && (error.status === null || error.status >= 500 || error.status === 408) && <p>The key may have been reissued, but its response was not received. The old key may already be invalid. Reissue again to obtain a usable key.</p>}
+    {error && <p className={styles.formError} role="alert">{action === 'delete' && error.status === 409
+      ? 'This worker is referenced by jobs or execution attempts and cannot be deleted.' : error.message}</p>}
+    {error && (error.status === null || error.status >= 500 || error.status === 408) && <p>{action === 'delete'
+      ? 'The worker may have been deleted, but its response was not received. Return to Workers and refresh the list before retrying.'
+      : 'The key may have been reissued, but its response was not received. The old key may already be invalid. Reissue again to obtain a usable key.'}</p>}
     {secret && <>
       <p>Save this API key now. It cannot be retrieved after leaving or reloading this page. Store it in your worker's private configuration and send it in the X-API-Key header.</p>
       <pre className={styles.json} aria-label="New worker API key">{secret}</pre>
