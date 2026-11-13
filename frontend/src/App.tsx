@@ -27,7 +27,22 @@ import styles from './App.module.css'
 function AppLayout() {
   const { user, logout, restoring, restoreError } = useAuth()
   const location = useLocation()
-  const section = location.pathname.startsWith('/producers') ? 'Producers' : location.pathname.startsWith('/workers') ? 'Workers' : location.pathname.startsWith('/jobs') ? 'Jobs' : 'Account'
+  const [resource, id, child, ...extra] = location.pathname.split('/').filter(Boolean)
+  const section = [
+    { path: 'jobs', label: 'Jobs', item: 'Job', create: 'Submit a job', childPath: 'attempts', childLabel: 'Attempt history' },
+    { path: 'workers', label: 'Workers', item: 'Worker', create: 'Register a worker', childPath: 'edit', childLabel: 'Edit worker' },
+    { path: 'producers', label: 'Producers', item: 'Producer', create: 'Create a producer', childPath: '', childLabel: '' },
+  ].find((entry) => entry.path === resource && extra.length === 0 && (!child || (id !== 'new' && child === entry.childPath)))
+  const breadcrumbs: { label: string; to: string; ariaLabel?: string }[] = [{ label: 'Workspace', to: '/jobs' }]
+  if (section) {
+    breadcrumbs.push({ label: section.label, to: `/${resource}`, ariaLabel: `${section.label} list` })
+    if (id) breadcrumbs.push({ label: id === 'new' ? section.create : `${section.item} #${id}`, to: `/${resource}/${id}` })
+    if (child) breadcrumbs.push({ label: section.childLabel, to: location.pathname })
+  } else {
+    breadcrumbs.push({ label: location.pathname === '/login' ? 'Sign in' : location.pathname === '/register' ? 'Create an account' : 'Page not found', to: location.pathname })
+  }
+  const pageTitle = breadcrumbs[breadcrumbs.length - 1].label
+  useEffect(() => { document.title = `${pageTitle} | Orqbit` }, [pageTitle])
   return (
     <div className={`${styles.app} ${!user ? styles.signedOut : ''}`}>
       <a className={styles.skipLink} href="#main-content">Skip to content</a>
@@ -57,7 +72,14 @@ function AppLayout() {
         </div>
       </aside>
       <div className={styles.workspace}>
-        <header className={styles.header}><div className={styles.breadcrumb}><span>Workspace</span><Icon name="chevron" size={13} /><strong>{section}</strong></div>
+        <header className={styles.header}>
+          <nav className={styles.breadcrumb} aria-label="Breadcrumb">
+            <ol>{breadcrumbs.map((crumb, index) => <li key={`${crumb.to}:${crumb.label}`}>
+              {index > 0 && <Icon name="chevron" size={13} />}
+              {index === breadcrumbs.length - 1 ? <span aria-current="page">{crumb.label}</span>
+                : <Link to={crumb.to} aria-label={crumb.ariaLabel}>{crumb.label}</Link>}
+            </li>)}</ol>
+          </nav>
           <span className={styles.consoleLabel}>Orqbit console</span>
         </header>
         <main id="main-content" className={styles.main} tabIndex={-1}><Outlet /></main>

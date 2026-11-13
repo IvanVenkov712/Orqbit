@@ -67,6 +67,8 @@ Follow these files and patterns when adding behavior. Extract shared components 
 
 The current layout has sidebar navigation for Jobs, Workers, and Producers, plus the signed-in user's identity and sign-out action. Jobs is the default authenticated destination. At narrow widths, CSS adapts the sidebar and collection layouts. Client routes below are distinct from backend endpoints.
 
+The header breadcrumb links to the workspace (Jobs), the current section's list, and the parent record on nested screens such as attempt history and worker editing. The current page is marked separately, and the browser tab title follows it. Breadcrumbs wrap on narrow screens; worker editing also provides a direct link back to worker details.
+
 | Client route | Screen and behavior |
 | --- | --- |
 | `/login` | Login form and registration link |

@@ -327,6 +327,7 @@ export function WorkerDetailsPage({ edit = false }: { edit?: boolean }) {
     <div className={styles.pageHeading}>
       <Link to="/workers">Back to Workers</Link>
       <h1>{edit ? 'Edit worker' : 'Worker details'}</h1>
+      {edit && <Link className={styles.secondaryLink} to={`/workers/${workerId}`}>Back to worker</Link>}
     </div>
     {unavailable ? <section className={styles.placeholder}>
       <h2>Worker unavailable</h2>

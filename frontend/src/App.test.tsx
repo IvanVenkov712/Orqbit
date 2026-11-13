@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import App from './App'
 import orqbitIcon from './assets/orqbit-icon.svg'
@@ -89,4 +89,30 @@ test('links to job submission after authentication', async () => {
   await enterApp()
   fireEvent.click(screen.getByRole('link', { name: 'Submit a job' }))
   expect(await screen.findByRole('heading', { level: 1, name: 'Submit a job' })).toBeTruthy()
+})
+
+test('navigates from attempt history through its job and list breadcrumbs to the workspace', async () => {
+  await enterApp('/jobs/42/attempts')
+  const breadcrumb = within(screen.getByRole('navigation', { name: 'Breadcrumb' }))
+  expect(breadcrumb.getByText('Attempt history').getAttribute('aria-current')).toBe('page')
+  expect(document.title).toBe('Attempt history | Orqbit')
+  fireEvent.click(breadcrumb.getByRole('link', { name: 'Job #42' }))
+  await screen.findByRole('heading', { level: 1, name: 'Job details' })
+  fireEvent.click(breadcrumb.getByRole('link', { name: 'Jobs list' }))
+  await screen.findByRole('table', { name: 'Submitted jobs' })
+  fireEvent.click(screen.getByRole('link', { name: 'Workers' }))
+  await screen.findByRole('heading', { level: 1, name: 'Workers' })
+  fireEvent.click(breadcrumb.getByRole('link', { name: 'Workspace' }))
+  await screen.findByRole('heading', { level: 1, name: 'Jobs' })
+})
+
+test('returns from worker editing to details and the directory', async () => {
+  await enterApp('/workers/17/edit')
+  await screen.findByRole('form', { name: 'Edit worker' })
+  const breadcrumb = within(screen.getByRole('navigation', { name: 'Breadcrumb' }))
+  expect(breadcrumb.getByRole('link', { name: 'Worker #17' }).getAttribute('href')).toBe('/workers/17')
+  fireEvent.click(screen.getByRole('link', { name: 'Back to worker' }))
+  await screen.findByRole('region', { name: 'Worker metadata' })
+  fireEvent.click(breadcrumb.getByRole('link', { name: 'Workers list' }))
+  await screen.findByRole('table', { name: 'Registered workers' })
 })
