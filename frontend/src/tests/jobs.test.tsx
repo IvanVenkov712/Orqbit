@@ -393,6 +393,19 @@ test('shows own job details with a username, formatted parameters, stored result
   expect(history.textContent).not.toMatch(/worker_id|User ID|Worker ID/)
 })
 
+test.each(['numbers-producer', null, undefined])('shows producer attribution in job details only when present: %s', async (producerName) => {
+  mockApi(async (path) => path === '/api/jobs/42' ? response({ ...job, producer_name: producerName }) : undefined)
+  await enterApp('/jobs/42')
+  const overview = await screen.findByRole('region', { name: 'Job overview' })
+  expect(within(overview).getByText('demo-user (you)')).toBeTruthy()
+  if (producerName) {
+    expect(within(overview).getByText('Producer')).toBeTruthy()
+    expect(within(overview).getByText(producerName)).toBeTruthy()
+  } else {
+    expect(within(overview).queryByText('Producer')).toBeNull()
+  }
+})
+
 test('shows a failed job and its attempt error as text', async () => {
   const error = { message: '<script>unsafe()</script>', code: 'INVALID_PARAMS' }
   fetchMock.mockImplementation(async (path) => {

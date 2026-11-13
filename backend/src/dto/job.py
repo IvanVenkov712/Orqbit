@@ -44,6 +44,9 @@ class JobRead(BaseModel):
     id: int
     user_id: int
     owner_username: str = Field(validation_alias=AliasPath("user", "username"))
+    producer_name: str | None = Field(
+        default=None, validation_alias=AliasPath("producer", "name")
+    )
     job_type: str
     params: dict[str, Any]
     result: dict[str, Any] | None = None

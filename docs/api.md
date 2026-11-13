@@ -64,7 +64,7 @@ Listing accepts `owner_id`, `owner_username`, `status`, `job_type`, `attempt_sta
 
 Submission keys retain the existing database scope `(user_id, idempotency_key)`. A matching retry from the same producer returns its existing job; changed content or a key already used by another producer or directly by that user returns 409, `Conflicting create requests`. The user submission route likewise rejects replaying a producer's key. Concurrent uniqueness conflicts use the same ownership check. Independent per-producer key namespaces would require a schema migration and are not implemented here. Invalid permission IDs return 422 as on user submission.
 
-The producer key does not grant access to `/jobs/{job_id}/attempts`; that route requires a user bearer token with job-read access. `JobRead` currently omits `producer_id`, even for producer submissions.
+The producer key does not grant access to `/jobs/{job_id}/attempts`; that route requires a user bearer token with job-read access. `JobRead` includes `producer_name` for producer submissions and omits `producer_id`.
 
 ## Jobs
 
@@ -99,6 +99,7 @@ The frontend browses all accessible owners by default and offers an optional **O
 | --- | --- |
 | `id`, `user_id` | Integer job and creator IDs |
 | `owner_username` | Creator's username |
+| `producer_name` | Submitting producer's name, including inactive producers; null for jobs submitted directly by a user or without producer attribution |
 | `job_type`, `params` | Submitted type and JSON-object input |
 | `status` | `PENDING`, `RUNNING`, `SUCCEEDED`, or `FAILED` |
 | `result`, `error` | JSON objects or null |
@@ -108,7 +109,7 @@ The frontend browses all accessible owners by default and offers an optional **O
 | `available_at` | UTC-aware earliest claim time; a pending job can be waiting for its retry delay |
 | `created_at`, `updated_at` | UTC-aware creation and last-update timestamps in ISO 8601 format |
 
-Permission policies, permitted-ID lists, and producer attribution are not currently included in job responses.
+Permission policies and permitted-ID lists are not currently included in job responses. The frontend shows the producer name in job details when attribution is present, alongside the creator's username.
 
 ### Attempt history
 

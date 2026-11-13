@@ -782,6 +782,30 @@ def test_producer_job_list_empty(producer_client, management_session):
     assert response.json() == []
 
 
+@pytest.mark.parametrize("producer_active", [True, False, None])
+def test_user_job_details_include_producer_name_without_credentials(
+    management_client, management_session, producer, producer_job, producer_active
+):
+    if producer_active is None:
+        producer_job.producer = None
+        producer_job.producer_id = None
+    else:
+        producer.active = producer_active
+    management_session.scalar.return_value = producer_job
+
+    response = management_client.get("/jobs/100")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["producer_name"] == (
+        producer.name if producer_active is not None else None
+    )
+    assert body["owner_username"] == producer.user.username
+    assert "secret_api_key" not in body
+    assert "secret_api_key_hash" not in body
+    assert producer.secret_api_key_hash not in response.text
+
+
 @pytest.mark.parametrize("found", [True, False])
 def test_producer_job_by_id_is_scoped_to_authenticated_producer(
     producer_client, management_session, producer, producer_job, found
@@ -793,6 +817,7 @@ def test_producer_job_by_id_is_scoped_to_authenticated_producer(
         assert response.json()["id"] == 100
         assert response.json()["params"] == {}
         assert response.json()["attempt_ids"] == []
+        assert response.json()["producer_name"] == producer.name
     else:
         assert response.status_code == 404
         assert response.json() == {"detail": "Job not found"}

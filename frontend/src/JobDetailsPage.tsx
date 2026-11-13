@@ -10,6 +10,7 @@ type Job = {
   id: number
   user_id: number
   owner_username: string
+  producer_name: string | null
   job_type: string
   status: JobStatus
   params: Record<string, unknown>
@@ -100,6 +101,7 @@ export function JobDetailsPage({ history = false }: { history?: boolean }) {
         <dl className={styles.metadata}>
           <div><dt>Job</dt><dd>#{job.id}</dd></div>
           <div><dt>Creator</dt><dd>{job.owner_username}{job.user_id === user?.id ? ' (you)' : ''}</dd></div>
+          {job.producer_name && <div><dt>Producer</dt><dd>{job.producer_name}</dd></div>}
           <div><dt>Type</dt><dd>{job.job_type}</dd></div>
           <div><dt>Attempts used</dt><dd>{job.attempts_count} of {job.max_attempts}</dd></div>
           {awaitingRetry && <div><dt>Retry eligible from</dt><dd>
