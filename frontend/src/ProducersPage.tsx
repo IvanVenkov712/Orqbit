@@ -80,11 +80,11 @@ export function ProducersPage() {
           <button type="button" onClick={() => { void producers.refetch() }}>Try again</button>
         </div> : producers.data.length === 0 ? <div className={styles.emptyState}><h3>No producers found</h3><p>{offset ? 'No more producers on this page.' : 'No producers match your search. Adjust the search or create a producer.'}</p></div>
         : <div className={styles.tableContainer}><table className={styles.jobsTable} aria-label="Registered producers">
-          <thead><tr><th scope="col">Name</th><th scope="col">Owner</th><th scope="col">Credential status</th></tr></thead>
+          <thead><tr><th scope="col">Name</th><th scope="col">Owner</th><th scope="col">Active</th></tr></thead>
           <tbody>{producers.data.map((producer) => <tr key={producer.id} className={styles.jobRow}>
             <td data-label="Name"><Link className={styles.jobLink} to={`/producers/${producer.id}`}>{producer.name}</Link><span className={styles.recordId}>#{producer.id}</span></td>
             <td data-label="Owner">{producer.owner_username}{producer.user_id === user?.id ? ' (you)' : ''}</td>
-            <td data-label="Credential status"><span className={styles.statusBadge} data-status={producer.active ? 'SUCCEEDED' : 'PENDING'}>{producer.active ? 'Active' : 'Inactive'}</span></td>
+            <td data-label="Active"><span className={styles.statusBadge} data-status={producer.active ? 'SUCCEEDED' : 'PENDING'}>{producer.active ? 'Yes' : 'No'}</span></td>
           </tr>)}</tbody>
         </table></div>}
       {!lookup && !invalid && producers.isSuccess && (offset > 0 || producers.data.length === limit) && <nav className={styles.pagination} aria-label="Producer pages">
@@ -264,7 +264,7 @@ function ProducerDetails({ producerId }: { producerId: string }) {
         <dl className={styles.metadata}>
           <div><dt>Producer ID</dt><dd>#{producer.id}</dd></div>
           <div><dt>Owner</dt><dd>{producer.owner_username}{producer.user_id === user?.id ? ' (you)' : ''}</dd></div>
-          <div><dt>Credential status</dt><dd>{producer.active ? 'Active' : 'Inactive'}</dd></div>
+          <div><dt>Active</dt><dd>{producer.active ? 'Yes' : 'No'}</dd></div>
         </dl>
         {notice && <p role="status">{notice}</p>}
         {producer.user_id === user?.id && <>

@@ -200,13 +200,13 @@ const sorts = [
   { value: 'created_desc', label: 'Recently created' }, { value: 'created_asc', label: 'Oldest first' },
   { value: 'name_asc', label: 'Name · A to Z' }, { value: 'name_desc', label: 'Name · Z to A' },
   { value: 'owner_asc', label: 'Owner · A to Z' }, { value: 'owner_desc', label: 'Owner · Z to A' },
-  { value: 'active_desc', label: 'Active credentials first' }, { value: 'active_asc', label: 'Inactive credentials first' },
+  { value: 'active_desc', label: 'Active: Yes first' }, { value: 'active_asc', label: 'Active: No first' },
 ]
-const groups = [{ value: 'active', label: 'Group by credential status' }, { value: 'owner', label: 'Group by owner' }, { value: 'visibility', label: 'Group by visibility' }]
+const groups = [{ value: 'active', label: 'Group by active' }, { value: 'owner', label: 'Group by owner' }, { value: 'visibility', label: 'Group by visibility' }]
 const filters: ListFilter[] = [
   { key: 'owner_username', label: 'Owner username', placeholder: 'e.g. alex', maxLength: 16 },
   { key: 'job_type', label: 'Supported job type', placeholder: 'e.g. add_numbers', maxLength: 100 },
-  { key: 'active', label: 'Credential/registration status', options: [{ value: 'true', label: 'Active' }, { value: 'false', label: 'Inactive' }] },
+  { key: 'active', label: 'Active', options: [{ value: 'true', label: 'Yes' }, { value: 'false', label: 'No' }] },
   { key: 'created_from', label: 'Created from', type: 'datetime-local' },
   { key: 'created_before', label: 'Created before', type: 'datetime-local' },
 ]
@@ -256,8 +256,7 @@ export function WorkersPage() {
 
   return <>
     <div className={styles.collectionHeading}>
-      <div><p className={styles.eyebrow}>WORKSPACE / WORKER DIRECTORY</p><h1>Workers</h1>
-        <p>The independent engines behind your work.</p></div>
+      <div><p className={styles.eyebrow}>WORKSPACE / WORKER DIRECTORY</p><h1>Workers</h1></div>
       <div className={styles.inlineActions}><button className={styles.iconButton} type="button" aria-label="Refresh workers" title="Refresh workers" disabled={workers.isFetching} onClick={() => { void workers.refetch() }}><Icon name="refresh" /></button>
         <Link className={styles.primaryLink} to="/workers/new"><Icon name="plus" size={17} />Register a worker</Link></div>
     </div>
@@ -282,16 +281,16 @@ export function WorkersPage() {
             <SortHeading label="Name" ascending="name_asc" descending="name_desc" current={sort} onSort={changeSort} />
             <SortHeading label="Owner" ascending="owner_asc" descending="owner_desc" current={sort} onSort={changeSort} />
             <th scope="col">Supported types</th>
-            <SortHeading label="Credential/registration status" ascending="active_asc" descending="active_desc" current={sort} onSort={changeSort} />
+            <SortHeading label="Active" ascending="active_asc" descending="active_desc" current={sort} onSort={changeSort} />
             <th scope="col">Visibility</th>
           </tr></thead>
           <GroupedRows key={`${group}:${offset}`} items={workers.data} group={group} columns={5}
-            groupLabel={(worker) => group === 'active' ? worker.active ? 'Active credentials' : 'Inactive credentials' : group === 'owner' ? worker.owner_username : visibilityLabels[worker.permission_policy]}
+            groupLabel={(worker) => group === 'active' ? worker.active ? 'Active: Yes' : 'Active: No' : group === 'owner' ? worker.owner_username : visibilityLabels[worker.permission_policy]}
             renderRow={(worker) => <tr className={styles.jobRow} key={worker.id}>
               <td><Link className={styles.jobLink} to={`/workers/${worker.id}`}>{worker.name}</Link><span className={styles.recordId}>#{worker.id}</span></td>
               <td><span className={styles.ownerCell}><span className={styles.smallAvatar} aria-hidden="true">{worker.owner_username.slice(0, 2).toUpperCase()}</span><span>{worker.owner_username}{worker.user_id === user?.id ? ' (you)' : ''}</span></span></td>
               <td><span className={styles.typeTags}>{worker.supported_types.map((type, index) => <Fragment key={type}><span className={styles.typeTag}>{type}</span>{index < worker.supported_types.length - 1 ? ', ' : ''}</Fragment>)}</span></td>
-              <td><span className={styles.statusBadge} data-status={worker.active ? 'SUCCEEDED' : 'PENDING'}>{worker.active ? 'Active' : 'Inactive'}</span></td>
+              <td><span className={styles.statusBadge} data-status={worker.active ? 'SUCCEEDED' : 'PENDING'}>{worker.active ? 'Yes' : 'No'}</span></td>
               <td><span className={styles.visibility}>{visibilityLabels[worker.permission_policy]}</span></td>
             </tr>} />
         </table>
@@ -341,11 +340,10 @@ export function WorkerDetailsPage({ edit = false }: { edit?: boolean }) {
       <dl className={styles.metadata}>
         <div><dt>Worker ID</dt><dd>#{worker.id}</dd></div>
         <div><dt>Owner</dt><dd>{worker.owner_username}{worker.user_id === user?.id ? ' (you)' : ''}</dd></div>
-        <div><dt>Credential/registration status</dt><dd>{worker.active ? 'Active' : 'Inactive'}</dd></div>
+        <div><dt>Active</dt><dd>{worker.active ? 'Yes' : 'No'}</dd></div>
         <div><dt>Visibility</dt><dd>{visibilityLabels[worker.permission_policy]}</dd></div>
         {worker.permission_policy === 'PERMITTED_USERS' && <div><dt>Permitted users</dt><dd>{permittedUsers.map((entry) => entry.data?.username ?? (entry.isPending ? 'Loading user…' : 'Unavailable user')).join(', ') || 'None'}</dd></div>}
       </dl>
-      <p>{credentialHelp}</p>
       <h3>Supported types</h3>
       <ul>{worker.supported_types.map((type) => <li key={type}>{type}</li>)}</ul>
     </section>}

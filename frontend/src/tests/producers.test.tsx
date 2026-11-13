@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
 import { enterApp, fetchMock, mockApi, response, setupAppTests, user } from './app-test-utils'
@@ -39,7 +39,8 @@ test('lists producer metadata, hides credentials and links to details', async ()
   await enterApp('/producers')
   const table = await screen.findByRole('table', { name: 'Registered producers' })
   expect(table.textContent).toContain(user.username)
-  expect(table.textContent).toContain('Active')
+  expect(within(table).getByRole('columnheader', { name: 'Active' })).toBeTruthy()
+  expect(within(table).getByRole('cell', { name: 'Yes' })).toBeTruthy()
   expect(document.body.textContent).not.toContain('never-display')
   fireEvent.click(screen.getByRole('link', { name: producer.name }))
   expect((await screen.findByRole('region', { name: 'Producer metadata' })).textContent).toContain('#10')
@@ -205,7 +206,7 @@ test.each([true, false])('reissues a key without changing active=%s and discards
   expect(screen.getByText(/old key will stop working immediately/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Confirm reissue' }))
   expect((await screen.findByLabelText('Producer API key')).textContent).toBe('replacement-secret')
-  expect(screen.getByRole('region', { name: 'Producer metadata' }).textContent).toContain(active ? 'Active' : 'Inactive')
+  expect(within(screen.getByRole('region', { name: 'Producer metadata' })).getByText(active ? 'Yes' : 'No', { selector: 'dd' })).toBeTruthy()
   expect(fetchMock.mock.calls.find(([path]) => path === '/api/producers/10/api-key')![1]?.method).toBe('POST')
   fireEvent.click(screen.getByRole('link', { name: 'Back to Producers' }))
   fireEvent.click(await screen.findByRole('link', { name: producer.name }))
@@ -224,9 +225,9 @@ test('deactivates the producer, updates the list and disables further deactivati
   fireEvent.click(screen.getByRole('button', { name: 'Confirm deactivation' }))
   await screen.findByText('Producer deactivated. Existing jobs are preserved.')
   expect((screen.getByRole('button', { name: 'Deactivate producer' }) as HTMLButtonElement).disabled).toBe(true)
-  expect(screen.getByText('Inactive')).toBeTruthy()
+  expect(screen.getByText('No', { selector: 'dd' })).toBeTruthy()
   fireEvent.click(screen.getByRole('link', { name: 'Back to Producers' }))
-  await screen.findByText('Inactive')
+  await screen.findByRole('cell', { name: 'No' })
 })
 
 test.each([false, true])('handles deletion with referenced jobs=%s', async (referenced) => {

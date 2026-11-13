@@ -43,7 +43,7 @@ function AppLayout() {
             <NavLink to="/workers" title="Workers"><Icon name="workers" />Workers<Icon name="chevron" size={14} /></NavLink>
             <NavLink to="/producers" title="Producers"><Icon name="arrow" />Producers<Icon name="chevron" size={14} /></NavLink>
           </nav>
-          <div className={styles.sidebarNote}><span className={styles.orbitDecoration} aria-hidden="true">◎</span><strong>Work, in motion.</strong><p>Independent workers.<br />One clear view.</p></div>
+          <div className={styles.sidebarNote}><span className={styles.orbitDecoration} aria-hidden="true">◎</span><strong>Work, in motion.</strong></div>
           <div className={styles.userArea} role="group" aria-label="Current user">
             {restoring ? <span>Checking session…</span> : restoreError ? <span>Session unavailable</span> : user ? <>
               <span className={styles.avatar} aria-hidden="true">{(user.full_name || user.username).slice(0, 2).toUpperCase()}</span>

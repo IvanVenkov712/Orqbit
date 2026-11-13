@@ -84,12 +84,10 @@ export function JobsPage() {
 
   return <>
     <div className={styles.collectionHeading}>
-      <div><p className={styles.eyebrow}>WORKSPACE / JOB QUEUE</p><h1>Jobs</h1>
-        <p>Every job, from queued to complete. Keep work in view.</p></div>
+      <div><p className={styles.eyebrow}>WORKSPACE / JOB QUEUE</p><h1>Jobs</h1></div>
       <div className={styles.inlineActions}><button className={styles.iconButton} type="button" aria-label="Refresh jobs" title="Refresh jobs" disabled={jobs.isFetching} onClick={() => { void jobs.refetch() }}><Icon name="refresh" /></button>
         <Link className={styles.primaryLink} to="/jobs/new"><Icon name="plus" size={17} />Submit a job</Link></div>
     </div>
-    <div className={styles.collectionIntro}><span className={styles.liveIndicator} data-error={jobs.isError} />{jobs.isError ? 'Queue unavailable' : jobs.isFetching ? 'Syncing jobs' : 'Connected to your queue'}<span>Visible jobs refresh while work is in progress</span></div>
     <section className={styles.collection} aria-label="Accessible jobs" aria-busy={jobs.isFetching}>
       <nav className={styles.statusTabs} aria-label="Job statuses">
         {statuses.map((value) => {
