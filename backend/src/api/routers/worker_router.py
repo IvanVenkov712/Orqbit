@@ -146,7 +146,10 @@ def update_worker(
     worker = get_owned_worker(worker_id, session, user)
     if worker is None:
         raise HTTPException(404, "Worker not found")
-    return update_worker_service(session, worker, payload)
+    try:
+        return update_worker_service(session, worker, payload)
+    except InvalidWorkerPermissions as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 @worker_router.post("/workers/{worker_id}/api-key", response_model=WorkerAPIKeyResponse)

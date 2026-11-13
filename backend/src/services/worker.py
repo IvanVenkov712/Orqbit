@@ -38,6 +38,13 @@ def get_owned_worker(worker_id: int, session: Session, user: User) -> Worker | N
 def update_worker(
     session: Session, worker: Worker, payload: WorkerUpdate
 ) -> WorkerRead:
+    if payload.permitted_user_ids is not None:
+        users = session.scalars(
+            select(User).where(User.id.in_(payload.permitted_user_ids))
+        ).all()
+        if len(users) != len(set(payload.permitted_user_ids)):
+            raise InvalidWorkerPermissions("Some permitted users do not exist")
+        worker.permitted_users = list(users)
     existing_types = {supported_type.type_name for supported_type in worker.supported_types}
     worker.supported_types = [
         supported_type

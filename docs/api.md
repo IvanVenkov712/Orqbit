@@ -168,7 +168,7 @@ The [quickstart](quickstart.md) provides executable registration/login and job-s
 | POST | `/workers` | JSON: `name`, `supported_types`, `permission_policy`; optional `permitted_user_ids` | Worker metadata plus `secret_api_key` |
 | GET | `/workers` | Optional `owner_username`, `owner_id`, `job_type`, `active`, `created_from`, `created_before`, `limit`, `offset`, `sort` | Accessible workers, newest ID first by default |
 | GET | `/workers/{worker_id}` | Worker ID | Accessible worker, or 404 |
-| PUT | `/workers/{worker_id}` | JSON: `supported_types`; optional `permission_policy` | Updated worker metadata |
+| PUT | `/workers/{worker_id}` | JSON: `supported_types`; optional `permission_policy`, `permitted_user_ids` | Updated worker metadata |
 | POST | `/workers/{worker_id}/api-key` | No body | `{"secret_api_key":"oqb_..."}` |
 | DELETE | `/workers/{worker_id}` | Worker ID | 204 No Content |
 
@@ -184,9 +184,9 @@ Worker metadata contains `id`, `name`, `active`, `user_id`, `owner_username`, `p
 
 ### Worker management
 
-Updating types or visibility policy, reissuing keys, and deleting workers require the owner's user bearer token. Visibility grants do not allow these operations. A missing worker or a worker owned by another user returns 404 (`Worker not found`); missing user authentication returns 401.
+Updating types, visibility policy or permitted users, reissuing keys, and deleting workers require the owner's user bearer token. Visibility grants do not allow these operations. A missing worker or a worker owned by another user returns 404 (`Worker not found`); missing user authentication returns 401.
 
-`PUT /workers/{worker_id}` replaces the entire supported set and optionally updates the worker's visibility policy, for example `{"supported_types":["send_email","generate_report"],"permission_policy":"ALL"}`. `supported_types` is required; omitting `permission_policy` or passing `null` preserves the current policy. Accepted policies are `PRIVATE`, `PERMITTED_USERS`, and `ALL`. The same nonempty-set and type-name validation as registration applies, including deduplication; invalid input returns 422 without changing the worker. Both changes commit together. New claims use the updated capabilities. Existing attempts, permitted-user grants, and other worker metadata are unchanged. This replaces `/workers/{worker_id}/supported-types`; clients must use the new URL.
+`PUT /workers/{worker_id}` replaces the entire supported set and optionally updates visibility and permitted users, for example `{"supported_types":["send_email","generate_report"],"permission_policy":"PERMITTED_USERS","permitted_user_ids":[12,15]}`. `supported_types` is required; omitting `permission_policy` or passing `null` preserves the current policy. Accepted policies are `PRIVATE`, `PERMITTED_USERS`, and `ALL`. Omitting `permitted_user_ids` or passing `null` preserves existing grants; an array replaces them, and `[]` clears them. IDs must be positive and refer to existing users; duplicates are deduplicated. Grants affect metadata visibility when the policy is `PERMITTED_USERS`. The same nonempty-set and type-name validation as registration applies. Invalid input or unknown users returns 422 without changing any worker fields. All supplied changes commit together. New claims use the updated capabilities. Existing attempts and other worker metadata are preserved. This replaces `/workers/{worker_id}/supported-types`; clients must use the new URL.
 
 `POST /workers/{worker_id}/api-key` generates a new key for the existing worker and returns only `secret_api_key`. After the change commits, subsequent authentication with the old key returns 401. Update the independent worker's configuration to use the new key for claims, heartbeats, and outcomes. Reissue preserves worker identity, capabilities, attempts, and active status; it does not reactivate an inactive worker. Requests already authenticated before reissue may finish.
 

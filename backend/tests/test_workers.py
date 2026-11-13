@@ -395,9 +395,10 @@ def test_update_worker_types_replaces_capabilities_and_changes_claim_eligibility
         assert session.get(Job, removed_id).status == JobStatus.PENDING
 
 
+@pytest.mark.parametrize("grant_fields", [{}, {"permitted_user_ids": None}])
 @pytest.mark.parametrize("policy", list(PermissionPolicy))
 def test_update_worker_changes_policy_and_types_and_preserves_other_metadata(
-    client, database, user, user_headers, claim_worker, policy
+    client, database, user, user_headers, claim_worker, policy, grant_fields
 ):
     worker, key_headers = claim_worker
     with Session(database) as session:
@@ -416,6 +417,7 @@ def test_update_worker_changes_policy_and_types_and_preserves_other_metadata(
         response = client.put(path, headers=user_headers, json={
             "supported_types": ["updated", "updated"],
             "permission_policy": policy.value,
+            **grant_fields,
         })
         assert response.status_code == 200
         assert response.json() == {
@@ -431,6 +433,78 @@ def test_update_worker_changes_policy_and_types_and_preserves_other_metadata(
         assert [u.id for u in stored.permitted_users] == [user.id]
 
 
+def test_update_worker_replaces_and_clears_user_grants_and_changes_visibility(
+    client, database, user, user_headers, claim_worker
+):
+    from services.user_auth import create_access_token
+
+    worker, key_headers = claim_worker
+    with Session(database) as session:
+        reader = User(
+            username="reader", email="reader@example.com",
+            full_name="Reader", hashed_password="unused",
+        )
+        session.add(reader)
+        stored = session.get(Worker, worker.id)
+        stored.name = "managed-worker"
+        stored.permission_policy = PermissionPolicy.PRIVATE
+        stored.permitted_users = [session.get(User, user.id)]
+        session.commit()
+        reader_id = reader.id
+    path = f"/workers/{worker.id}"
+    reader_headers = {"Authorization": f"Bearer {create_access_token('reader')}"}
+    assert client.get(path, headers=reader_headers).status_code == 404
+    for _ in range(2):
+        updated = client.put(path, headers=user_headers, json={
+            "supported_types": ["new"], "permission_policy": "PERMITTED_USERS",
+            "permitted_user_ids": [reader_id, reader_id],
+        })
+        assert updated.status_code == 200
+        assert updated.json()["permitted_user_ids"] == [reader_id]
+        assert updated.json()["supported_types"] == ["new"]
+        assert "secret_api_key" not in updated.text
+    assert client.get(path, headers=reader_headers).status_code == 200
+    assert [item["id"] for item in client.get("/workers", headers=reader_headers).json()] == [worker.id]
+    assert client.put(path, headers=reader_headers, json={
+        "supported_types": ["new"], "permitted_user_ids": [],
+    }).status_code == 404
+    cleared = client.put(path, headers=user_headers, json={
+        "supported_types": ["new"], "permitted_user_ids": [],
+    })
+    assert cleared.status_code == 200
+    assert cleared.json()["permitted_user_ids"] == []
+    assert client.get(path, headers=reader_headers).status_code == 404
+    assert client.get("/workers", headers=reader_headers).json() == []
+    with Session(database) as session:
+        stored = session.get(Worker, worker.id)
+        assert stored.permitted_users == []
+        assert stored.name == "managed-worker"
+        assert stored.user_id == user.id
+        assert stored.secret_api_key_hash == hash_api_key(key_headers["X-API-Key"])
+
+
+def test_update_worker_rejects_unknown_user_without_partial_changes(
+    client, database, user, user_headers, claim_worker
+):
+    worker, _ = claim_worker
+    with Session(database) as session:
+        stored = session.get(Worker, worker.id)
+        stored.permission_policy = PermissionPolicy.PRIVATE
+        stored.permitted_users = [session.get(User, user.id)]
+        session.commit()
+    response = client.put(f"/workers/{worker.id}", headers=user_headers, json={
+        "supported_types": ["new"], "permission_policy": "ALL",
+        "permitted_user_ids": [user.id, user.id + 10000],
+    })
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Some permitted users do not exist"}
+    with Session(database) as session:
+        stored = session.get(Worker, worker.id)
+        assert stored.permission_policy == PermissionPolicy.PRIVATE
+        assert {item.type_name for item in stored.supported_types} == {"example"}
+        assert [item.id for item in stored.permitted_users] == [user.id]
+
+
 @pytest.mark.parametrize("payload", [
     {}, {"supported_types": []}, {"supported_types": [""]},
     {"supported_types": [" \t"]}, {"supported_types": ["a" * 101]},
@@ -438,6 +512,8 @@ def test_update_worker_changes_policy_and_types_and_preserves_other_metadata(
     {"supported_types": ["new"], "permission_policy": "unknown"},
     {"supported_types": ["new"], "permission_policy": 123},
     {"supported_types": [], "permission_policy": "PRIVATE"},
+    *({"supported_types": ["new"], "permitted_user_ids": value}
+      for value in ([0], [-1], [1.5], ["invalid"], [None], "1,2")),
 ])
 def test_update_worker_rejects_invalid_payload_without_changes(
     client, database, claim_worker, user_headers, payload
@@ -519,7 +595,7 @@ def test_reissuing_worker_key_does_not_reactivate_inactive_worker(
 
 
 @pytest.mark.parametrize("method, suffix, payload", [
-    ("PUT", "", {"supported_types": ["new"], "permission_policy": "PRIVATE"}),
+    ("PUT", "", {"supported_types": ["new"], "permission_policy": "PRIVATE", "permitted_user_ids": []}),
     ("POST", "/api-key", None),
     ("DELETE", "", None),
 ])

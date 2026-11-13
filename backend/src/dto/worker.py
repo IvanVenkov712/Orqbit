@@ -10,6 +10,7 @@ class WorkerUpdate(BaseModel):
         Annotated[str, Field(min_length=1, max_length=100, pattern=r"\S")]
     ] = Field(min_length=1)
     permission_policy: PermissionPolicy | None = None
+    permitted_user_ids: list[PositiveInt] | None = None
 
 
 class WorkerAPIKeyResponse(BaseModel):

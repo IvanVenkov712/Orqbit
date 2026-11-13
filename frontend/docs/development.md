@@ -77,8 +77,8 @@ The current layout has sidebar navigation for Jobs, Workers, and Producers, plus
 | `/jobs/:jobId/attempts` | Dedicated attempt-history view |
 | `/workers` | Accessible workers from all owners, type/owner/active/date filters, sorting, grouping, pagination, and registration |
 | `/workers/new` | Worker registration and one-time API-key display |
-| `/workers/:workerId` | Worker metadata, supported types, visibility policy, and an owner-only edit link |
-| `/workers/:workerId/edit` | Owner-only supported-type and visibility editing |
+| `/workers/:workerId` | Worker metadata, supported types, visibility policy, owner-only edit link and API-key reissue |
+| `/workers/:workerId/edit` | Owner-only supported-type, visibility and permitted-user editing, plus API-key reissue |
 | `/producers` | Your producers, partial/exact name or ID search, and page-size selection |
 | `/producers/new` | Producer registration and one-time API-key display |
 | `/producers/:producerId` | Producer metadata, key reissue, deactivation, and deletion when unreferenced |
@@ -103,7 +103,9 @@ Use the current unversioned contract in the [API reference](../../docs/api.md); 
 | Read attempts | `GET /api/jobs/{id}/attempts` |
 | Register/list workers | `POST /api/workers`, `GET /api/workers` |
 | Read worker | `GET /api/workers/{id}` |
-| Edit worker | `PUT /api/workers/{id}`, supported types and visibility policy |
+| Edit worker | `PUT /api/workers/{id}`, supported types, visibility policy and optional permitted-user IDs |
+| Reissue worker key | `POST /api/workers/{id}/api-key` |
+| Find permitted users | `GET /api/users?query=...&limit=10`, `GET /api/users/{id}` |
 | Suggest job types | `GET /api/job-types`, accessible workers' types with optional `query` and `limit` |
 | Register/list producers | `POST /api/producers`, `GET /api/producers` |
 | Read producer | `GET /api/producers/{id}`, `GET /api/producers/by-name/{name}` |
@@ -120,9 +122,9 @@ Persist only the access token in local storage, keeping passwords and current-us
 
 Validate that parameters parse as a JSON object; arrays, primitives, and null are invalid top-level inputs. Start with `PRIVATE` policy. Generate a submission key, for example using `crypto.randomUUID()`, once for the intended request. Retain its payload and key when retrying an uncertain response. A fresh submission or deliberately revised request needs a new key. Do not automatically retry a changed payload with the old key, or create a new key merely because the response was lost.
 
-Worker registration requires a name, nonempty supported types, and visibility policy. Producer registration requires a name. Show the returned `secret_api_key` only in the immediate creation/reissue result, with a copy action and instructions to save it. Avoid storing it in browser persistence, URLs, logs, or the long-lived query cache. Later reads cannot retrieve it. The backend supports owner-authorized key reissue for both registrations; the browser currently exposes reissue only for producers.
+Worker registration requires a name, nonempty supported types, and visibility policy. Producer registration requires a name. Show the returned `secret_api_key` only in the immediate creation/reissue result, with a copy action and instructions to save it. Avoid storing it in browser persistence, URLs, logs, or the long-lived query cache. Later reads cannot retrieve it. Both worker and producer screens expose owner-authorized key reissue with explicit confirmation that the old key stops working immediately. Worker reissue is available on both details and editing screens; leaving the screen, changing worker or reloading discards the displayed key. A lost response may mean the key changed; no automatic retry is performed.
 
-Worker registration and editing use the same tag input for supported types. Add a type with Enter or Add, remove it with its × button, or remove the last tag with Backspace when the input is empty. The input suggests types from accessible workers and also accepts new types. Duplicates are removed; case and spaces are preserved because job types match exactly. Saving includes any text still in the input. At least one non-blank type of at most 100 characters is required. The edit page changes supported types and visibility through the existing API; worker names and existing permitted-user grants cannot be changed by that endpoint. Cancel discards the draft; a successful save returns to refreshed details and invalidates worker lists.
+Worker registration and editing use the same tag input for supported types. Add a type with Enter or Add, remove it with its × button, or remove the last tag with Backspace when the input is empty. The input suggests types from accessible workers and also accepts new types. Duplicates are removed; case and spaces are preserved because job types match exactly. Saving includes any text still in the input. At least one non-blank type of at most 100 characters is required. Both forms also use the same permitted-user tag input when `PERMITTED_USERS` is selected: search usernames using the public user directory, choose a suggestion and add it with Enter or Add user, or enter/paste positive user IDs. Tags display usernames when available and retain an ID fallback for unavailable users. User IDs are deduplicated and validated by the API. On editing, saving an empty selection clears all grants; other policies omit the field and preserve stored grants. The update endpoint also preserves grants when the field is omitted or null. Worker names cannot be changed by that endpoint. Cancel discards the draft; a successful save returns to refreshed details and invalidates worker lists.
 
 Producer deactivation preserves jobs and disables producer-key authentication. Reissue does not reactivate credentials. Deletion of a producer referenced by jobs returns 409. The interface provides no producer reactivation action because the API has no corresponding endpoint.
 
@@ -174,7 +176,7 @@ Check actual color combinations against WCAG: normal text needs 4.5:1 contrast a
 - Attempt history includes worker attribution and creation/update timestamps. `updated_at` is not a dedicated finished timestamp. Display timezone information clearly when formatting timestamps.
 - Worker `active` indicates authentication eligibility, not online status. Attempt heartbeats do not provide a separate worker-process liveness signal.
 - Recovery schedules retries for lost attempts while budget remains. A worker-reported failure is terminal. Use [recovery and bounded retries](../../docs/api.md#recovery-and-bounded-retries) when presenting these states.
-- Worker supported-type and visibility updates have owner-only browser controls. Worker key reissue and deletion are implemented API operations but currently lack browser controls. Producer management includes key reissue, deactivation, and safe deletion in both API and UI.
+- Worker supported-type, visibility and permitted-user updates, plus API-key reissue, have owner-only browser controls. Worker deletion is an implemented API operation but currently lacks a browser control. Producer management includes key reissue, deactivation, and safe deletion in both API and UI.
 - Job update/delete, cancellation, manual replay, account management, token refresh, worker deactivation, and producer reactivation have no current endpoints. Add their controls only when backend contracts exist.
 - Client route guards improve navigation; authorization remains enforced by the API.
 
