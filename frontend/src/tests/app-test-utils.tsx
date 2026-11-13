@@ -3,6 +3,10 @@ import { afterEach, beforeEach, expect, vi } from 'vitest'
 import App from '../App'
 
 export const user = { id: 7, username: 'demo-user', email: 'demo@example.com', full_name: 'Demo User', active: true, role: 'REGULAR' }
+export const publicUsers = [
+  { id: 12, username: 'alex', full_name: 'Alex Example' },
+  { id: 15, username: 'maria', full_name: 'Maria Example' },
+]
 export const fetchMock = vi.fn<typeof fetch>()
 export const storageKey = 'orqbit.access_token'
 export const worker = {
@@ -38,6 +42,14 @@ export function setupAppTests() {
     fetchMock.mockImplementation(async (path) => {
       if (path === '/api/auth/login') return response({ access_token: token(), token_type: 'bearer' })
       if (path === '/api/users/me/' || path === '/api/auth/register') return response(user)
+      if (String(path).startsWith('/api/users?')) {
+        const query = new URL(String(path), 'http://localhost').searchParams.get('query')?.toLowerCase() ?? ''
+        return response(publicUsers.filter((candidate) => candidate.username.includes(query)))
+      }
+      if (/^\/api\/users\/\d+$/.test(String(path))) {
+        const found = publicUsers.find((candidate) => candidate.id === Number(String(path).split('/').at(-1)))
+        return found ? response(found) : response({ detail: 'User not found' }, 404)
+      }
       if (String(path).startsWith('/api/jobs?')) return response([{ ...job, status: new URL(String(path), 'http://localhost').searchParams.get('status') ?? 'PENDING' }])
       if (/^\/api\/jobs\/\d+$/.test(String(path))) return response(job)
       if (String(path).startsWith('/api/jobs/42/attempts?')) return response([attempt])
@@ -112,6 +124,13 @@ export function fillWorkerRegistration(types = 'add_numbers\nsum\nadd_numbers') 
     if (type.trim() && type.length <= 100) fireEvent.keyDown(input, { key: 'Enter' })
   }
   fireEvent.submit(screen.getByRole('form', { name: 'Register a worker' }))
+}
+
+export async function selectPermittedUser(username: string) {
+  const input = screen.getByLabelText('Permitted users')
+  fireEvent.focus(input)
+  fireEvent.change(input, { target: { value: username } })
+  fireEvent.click(await screen.findByRole('option', { name: new RegExp(`^${username}(?:\\s|$)`) }))
 }
 
 // Return undefined for requests that should use the existing mock response.

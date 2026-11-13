@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { ApiError } from './api/client'
 import { useAuth } from './auth'
@@ -32,6 +32,105 @@ function readSupportedTypes(form: FormData) {
     throw new ApiError(message, null, [{ loc: ['supported_types'], msg: message, type: 'value_error' }])
   }
   return types
+}
+
+function readPermittedUserIds(form: FormData) {
+  if (String(form.get('permitted_user_search') ?? '').trim()) {
+    const message = 'Select a user from the suggestions before saving.'
+    throw new ApiError(message, null, [{ loc: ['permitted_user_ids'], msg: message, type: 'value_error' }])
+  }
+  return [...new Set(form.getAll('permitted_user_ids').map(Number))]
+}
+
+type PublicUser = { id: number; username: string; full_name: string }
+
+function PermittedUsersInput({ defaultValue = [], error = '', disabled = false, onEnable }: {
+  defaultValue?: number[]; error?: string; disabled?: boolean; onEnable: () => void
+}) {
+  const { user, request } = useAuth()
+  const queryClient = useQueryClient()
+  const [ids, setIds] = useState(defaultValue)
+  const [draft, setDraft] = useState('')
+  const [focused, setFocused] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const input = useRef<HTMLInputElement>(null)
+  const suggestions = useQuery({
+    queryKey: ['user-suggestions', user?.id, draft],
+    enabled: !!user && !disabled && focused && draft.length <= 16,
+    queryFn: ({ signal }) => {
+      const query = new URLSearchParams({ limit: '10' })
+      if (draft) query.set('query', draft)
+      return request<PublicUser[]>(`/users?${query}`, { signal })
+    },
+  })
+  const selectedUsers = useQueries({ queries: ids.map((id) => ({
+    queryKey: ['public-user', user?.id, id],
+    queryFn: ({ signal }: { signal: AbortSignal }) => request<PublicUser>(`/users/${id}`, { signal }),
+    staleTime: 60_000,
+  })) })
+  const options = suggestions.data?.filter((candidate) => !ids.includes(candidate.id)) ?? []
+  const expanded = focused && !disabled
+
+  function addUser(candidate: PublicUser | undefined) {
+    if (disabled || !candidate) return
+    queryClient.setQueryData(['public-user', user?.id, candidate.id], candidate)
+    setIds((current) => [...new Set([...current, candidate.id])])
+    setDraft('')
+    setActiveIndex(0)
+    input.current?.focus()
+  }
+
+  return <div>
+    <label htmlFor="worker-user-search">Permitted users</label>
+    <div className={styles.topicEditor}>
+      {ids.length > 0 && <ul className={styles.topicList} aria-label="Selected permitted users">
+        {ids.map((id, index) => <li key={id} className={styles.topicTag}>
+          <span>{selectedUsers[index].data?.username ?? (selectedUsers[index].isPending ? 'Loading user…' : 'Unavailable user')}</span><input type="hidden" name="permitted_user_ids" value={id} />
+          <button type="button" disabled={disabled} aria-label={`Remove ${selectedUsers[index].data?.username ?? 'unavailable user'}`} onClick={() => {
+            setIds((current) => current.filter((value) => value !== id))
+            input.current?.focus()
+          }}><Icon name="close" size={13} /></button>
+        </li>)}
+      </ul>}
+      <div className={styles.topicEntry}>
+        <input ref={input} id="worker-user-search" name="permitted_user_search" value={draft} disabled={disabled} placeholder="Search by username" autoComplete="off" maxLength={16}
+          role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls="worker-user-suggestions"
+          aria-activedescendant={expanded && options[activeIndex] ? `worker-user-option-${activeIndex}` : undefined}
+          aria-invalid={!!error} aria-describedby="worker-user-ids-help worker-user-ids-error"
+          onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+          onChange={(event) => { setDraft(event.target.value); setActiveIndex(0); setFocused(true) }}
+          onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return
+            if (event.key === 'Enter') { event.preventDefault(); addUser(options[activeIndex]) }
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault()
+              setFocused(true)
+              setActiveIndex((current) => Math.max(0, Math.min(options.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1))))
+            }
+            if (event.key === 'Escape') setFocused(false)
+            if (event.key === 'Backspace' && !draft) setIds((current) => current.slice(0, -1))
+          }} />
+        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => addUser(options[activeIndex])}
+          disabled={disabled || !expanded || !options[activeIndex]}><Icon name="plus" size={15} />Add user</button>
+      </div>
+      {expanded && <>
+        <ul id="worker-user-suggestions" role="listbox" aria-label="User suggestions" className={styles.userSuggestions}>
+          {options.map((candidate, index) => <li key={candidate.id} id={`worker-user-option-${index}`} role="option"
+            aria-selected={index === activeIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => addUser(candidate)}>
+            <span>{candidate.username}</span>{' '}<small>{candidate.full_name}</small>
+          </li>)}
+        </ul>
+        {suggestions.isFetching && <small role="status">Searching users…</small>}
+        {suggestions.isError && <small role="status">Unable to search users. <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { void suggestions.refetch() }}>Retry user search</button></small>}
+        {suggestions.isSuccess && options.length === 0 && <small role="status">No matching users to add.</small>}
+      </>}
+    </div>
+    <small id="worker-user-ids-help">{disabled
+      ? 'Choose Permitted users as the visibility policy to edit this list and share worker metadata with selected users.'
+      : 'Search by username and select a person from the suggestions. Use the arrow keys and Enter, or click a suggestion. Remove a selected user with ×. Grants metadata visibility only.'}</small>
+    {disabled && <button type="button" className={styles.controlButton} onClick={onEnable}>Choose permitted users</button>}
+    <small id="worker-user-ids-error">{error}</small>
+  </div>
 }
 
 function SupportedTypesInput({ defaultValue = [], error = '' }: { defaultValue?: string[]; error?: string }) {
@@ -219,6 +318,11 @@ export function WorkerDetailsPage({ edit = false }: { edit?: boolean }) {
   const worker = details.data
   const unavailable = !validId || (details.error instanceof ApiError && [403, 404].includes(details.error.status ?? 0))
     || (edit && worker && worker.user_id !== user?.id)
+  const permittedUsers = useQueries({ queries: (!edit && !unavailable && worker?.permission_policy === 'PERMITTED_USERS' ? worker.permitted_user_ids : []).map((id) => ({
+    queryKey: ['public-user', user?.id, id],
+    queryFn: ({ signal }: { signal: AbortSignal }) => request<PublicUser>(`/users/${id}`, { signal }),
+    staleTime: 60_000,
+  })) })
 
   return <>
     <div className={styles.pageHeading}>
@@ -239,13 +343,74 @@ export function WorkerDetailsPage({ edit = false }: { edit?: boolean }) {
         <div><dt>Owner</dt><dd>{worker.owner_username}{worker.user_id === user?.id ? ' (you)' : ''}</dd></div>
         <div><dt>Credential/registration status</dt><dd>{worker.active ? 'Active' : 'Inactive'}</dd></div>
         <div><dt>Visibility</dt><dd>{visibilityLabels[worker.permission_policy]}</dd></div>
-        {worker.permission_policy === 'PERMITTED_USERS' && <div><dt>Permitted user IDs</dt><dd>{worker.permitted_user_ids.join(', ') || 'None'}</dd></div>}
+        {worker.permission_policy === 'PERMITTED_USERS' && <div><dt>Permitted users</dt><dd>{permittedUsers.map((entry) => entry.data?.username ?? (entry.isPending ? 'Loading user…' : 'Unavailable user')).join(', ') || 'None'}</dd></div>}
       </dl>
       <p>{credentialHelp}</p>
       <h3>Supported types</h3>
       <ul>{worker.supported_types.map((type) => <li key={type}>{type}</li>)}</ul>
     </section>}
+    {!unavailable && worker && worker.user_id === user?.id && <div className={styles.actions}>
+      <WorkerApiKey key={`${user?.id}:${worker.id}:${edit}`} workerId={worker.id} />
+    </div>}
   </>
+}
+
+function WorkerApiKey({ workerId }: { workerId: number }) {
+  const { request } = useAuth()
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [secret, setSecret] = useState<string | null>(null)
+  const [error, setError] = useState<ApiError | null>(null)
+  const [copyStatus, setCopyStatus] = useState('')
+  const pending = useRef<AbortController | null>(null)
+  useEffect(() => () => { pending.current?.abort() }, [])
+
+  async function reissue() {
+    if (pending.current) return
+    const controller = new AbortController()
+    pending.current = controller
+    setBusy(true)
+    setSecret(null)
+    setCopyStatus('')
+    setError(null)
+    try {
+      const result = await request<{ secret_api_key: string }>(`/workers/${workerId}/api-key`, { method: 'POST', signal: controller.signal })
+      if (typeof result?.secret_api_key !== 'string' || !result.secret_api_key) throw new ApiError('Orqbit returned an invalid API key response.', null)
+      if (!controller.signal.aborted) { setSecret(result.secret_api_key); setConfirming(false) }
+    } catch (cause) {
+      if (!controller.signal.aborted) setError(cause instanceof ApiError ? cause : new ApiError('Unable to reissue this API key. Please try again.', null))
+    } finally {
+      if (!controller.signal.aborted) { pending.current = null; setBusy(false) }
+    }
+  }
+
+  async function copyKey() {
+    if (!secret) return
+    try { await navigator.clipboard.writeText(secret); setCopyStatus('API key copied. Save it securely.') }
+    catch { setCopyStatus('Unable to copy. Select the API key above and copy it manually.') }
+  }
+
+  return <section className={styles.placeholder} aria-label="Worker API key management" aria-busy={busy}>
+    <h2>Worker API key</h2>
+    <p>Reissue the key if you need new credentials for this worker.</p>
+    <button type="button" disabled={busy} onClick={() => { setConfirming(true); setError(null) }}>Reissue API key</button>
+    {confirming && <section aria-label="Confirm worker key reissue">
+      <h3>Reissue API key?</h3>
+      <p>The old key will stop working immediately. Update your independent worker's configuration with the new key. Reissuing does not reactivate an inactive worker.</p>
+      <div className={styles.actions}>
+        <button type="button" disabled={busy} onClick={() => { void reissue() }}>{busy ? 'Reissuing…' : 'Confirm reissue'}</button>
+        <button type="button" className={styles.controlButton} disabled={busy} onClick={() => { setConfirming(false); setError(null) }}>Cancel reissue</button>
+      </div>
+    </section>}
+    {error && <p className={styles.formError} role="alert">{error.message}</p>}
+    {error && (error.status === null || error.status >= 500 || error.status === 408) && <p>The key may have been reissued, but its response was not received. The old key may already be invalid. Reissue again to obtain a usable key.</p>}
+    {secret && <>
+      <p>Save this API key now. It cannot be retrieved after leaving or reloading this page. Store it in your worker's private configuration and send it in the X-API-Key header.</p>
+      <pre className={styles.json} aria-label="New worker API key">{secret}</pre>
+      <div className={styles.actions}><button type="button" onClick={() => { void copyKey() }}>Copy API key</button></div>
+      {copyStatus && <p role="status">{copyStatus}</p>}
+    </>}
+  </section>
 }
 
 function EditWorkerForm({ worker }: { worker: Worker }) {
@@ -254,6 +419,7 @@ function EditWorkerForm({ worker }: { worker: Worker }) {
   const queryClient = useQueryClient()
   const [error, setError] = useState<ApiError | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [policy, setPolicy] = useState(worker.permission_policy)
   const pending = useRef<AbortController | null>(null)
   useEffect(() => () => { pending.current?.abort() }, [])
 
@@ -262,14 +428,21 @@ function EditWorkerForm({ worker }: { worker: Worker }) {
     if (pending.current) return
     const form = new FormData(event.currentTarget)
     let supportedTypes: string[]
-    try { supportedTypes = readSupportedTypes(form) } catch (cause) { setError(cause as ApiError); return }
+    let permittedUserIds: number[] | undefined
+    try {
+      supportedTypes = readSupportedTypes(form)
+      if (policy === 'PERMITTED_USERS') permittedUserIds = readPermittedUserIds(form)
+    } catch (cause) { setError(cause as ApiError); return }
     const controller = new AbortController()
     pending.current = controller
     setSubmitting(true)
     setError(null)
     try {
       await request<Worker>(`/workers/${worker.id}`, {
-        method: 'PUT', json: { supported_types: supportedTypes, permission_policy: form.get('permission_policy') },
+        method: 'PUT', json: {
+          supported_types: supportedTypes, permission_policy: policy,
+          ...(permittedUserIds !== undefined ? { permitted_user_ids: permittedUserIds } : {}),
+        },
         signal: controller.signal,
       })
       if (!controller.signal.aborted) {
@@ -301,13 +474,15 @@ function EditWorkerForm({ worker }: { worker: Worker }) {
         <SupportedTypesInput defaultValue={worker.supported_types} error={fieldError('supported_types')} />
         <div>
           <label htmlFor="worker-policy">Visibility policy</label>
-          <select id="worker-policy" name="permission_policy" defaultValue={worker.permission_policy}
+          <select id="worker-policy" name="permission_policy" value={policy} onChange={(event) => setPolicy(event.target.value as Worker['permission_policy'])}
             aria-invalid={!!fieldError('permission_policy')} aria-describedby="worker-policy-help worker-policy-error">
             {Object.entries(visibilityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
-          <small id="worker-policy-help">Private: only you. Permitted users: you and existing user grants ({worker.permitted_user_ids.join(', ') || 'none'}). All users: any authenticated user. Existing user grants cannot be edited through the current API. Visibility does not allow others to claim as this worker.</small>
+          <small id="worker-policy-help">Private: only you. Permitted users: you and the listed users. All users: any authenticated user. Visibility does not allow others to claim as this worker.</small>
           <small id="worker-policy-error">{fieldError('permission_policy')}</small>
         </div>
+        <PermittedUsersInput defaultValue={worker.permitted_user_ids} error={fieldError('permitted_user_ids')}
+          disabled={policy !== 'PERMITTED_USERS'} onEnable={() => setPolicy('PERMITTED_USERS')} />
         <button type="submit">{submitting ? 'Saving…' : 'Save changes'}</button>
       </fieldset>
       <Link to={`/workers/${worker.id}`}>Cancel</Link>
@@ -342,14 +517,7 @@ export function RegisterWorkerPage() {
     try { supportedTypes = readSupportedTypes(form) } catch (cause) { setError(cause as ApiError); return }
     let permittedUserIds: number[] | undefined
     if (policy === 'PERMITTED_USERS') {
-      const input = String(form.get('permitted_user_ids') ?? '').trim()
-      const values = input ? input.split(/[,\s]+/) : []
-      if (values.some((value) => !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0)) {
-        const message = 'Enter positive whole-number IDs separated by commas or whitespace.'
-        setError(new ApiError(message, null, [{ loc: ['permitted_user_ids'], msg: message, type: 'value_error' }]))
-        return
-      }
-      permittedUserIds = [...new Set(values.map(Number))]
+      try { permittedUserIds = readPermittedUserIds(form) } catch (cause) { setError(cause as ApiError); return }
     }
     const controller = new AbortController()
     pending.current = controller
@@ -438,13 +606,8 @@ export function RegisterWorkerPage() {
                   : "Any authenticated user can view this worker's metadata."} Visibility does not reveal the API key or allow others to claim as this worker. Job access policies determine which jobs it can claim.</small>
               <small id="worker-policy-error">{fieldError('permission_policy')}</small>
             </div>
-            {policy === 'PERMITTED_USERS' && <div>
-              <label htmlFor="worker-user-ids">Permitted user IDs</label>
-              <input id="worker-user-ids" name="permitted_user_ids" aria-invalid={!!fieldError('permitted_user_ids')}
-                aria-describedby="worker-user-ids-help worker-user-ids-error" />
-              <small id="worker-user-ids-help">Existing user IDs, separated by commas or whitespace. Grants metadata visibility only. Leave blank for no additional user grants.</small>
-              <small id="worker-user-ids-error">{fieldError('permitted_user_ids')}</small>
-            </div>}
+            <PermittedUsersInput error={fieldError('permitted_user_ids')} disabled={policy !== 'PERMITTED_USERS'}
+              onEnable={() => { setPolicy('PERMITTED_USERS'); setError(null) }} />
             <button type="submit">{submitting ? 'Registering…' : 'Register worker'}</button>
           </fieldset>
         </form>

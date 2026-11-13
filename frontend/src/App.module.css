@@ -162,6 +162,11 @@
 .topicEntry { display: flex; gap: 8px; }
 .topicEntry input { flex: 1; min-width: 0; }
 .topicEntry button { flex-shrink: 0; font-size: 12px; }
+.userSuggestions { list-style: none; padding: 0; margin: 8px 0 0; max-height: 220px; overflow-y: auto; }
+.userSuggestions:empty { display: none; }
+.userSuggestions li { padding: 8px 12px; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere; }
+.userSuggestions li:hover, .userSuggestions li[aria-selected='true'] { background: var(--color-primary-soft); color: var(--color-primary-hover); }
+.userSuggestions small { margin-top: 2px; }
 .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
 .filters label { font-size: 11px; }
 .filters input, .filters select { font-size: 12px; }

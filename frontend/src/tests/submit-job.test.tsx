@@ -2,7 +2,7 @@
 import { act, fireEvent, screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import {
-  fetchMock, storageKey, worker, response, enterApp, fillJob, submitJob, fillWorkerRegistration, mockApi, setupAppTests,
+  fetchMock, storageKey, worker, response, enterApp, fillJob, submitJob, fillWorkerRegistration, selectPermittedUser, mockApi, setupAppTests,
 } from './app-test-utils'
 
 setupAppTests()
@@ -100,49 +100,50 @@ test.each([
   expect(screen.queryByLabelText('Access policy')).toBeNull()
 })
 
-test.each(['job users', 'job workers', 'worker users'])('validates positive IDs for %s and allows correcting them', async (target) => {
-  const registering = target === 'worker users'
-  await enterApp(registering ? '/workers/new' : '/jobs/new')
-  if (!registering) fillJob({})
-  fireEvent.change(screen.getByLabelText(registering ? 'Visibility policy' : 'Access policy'), {
+test.each(['job users', 'job workers'])('validates positive IDs for %s and allows correcting them', async (target) => {
+  await enterApp('/jobs/new')
+  fillJob({})
+  fireEvent.change(screen.getByLabelText('Access policy'), {
     target: { value: target === 'job workers' ? 'PERMITTED_WORKERS' : 'PERMITTED_USERS' },
   })
   const ids = screen.getByLabelText(target === 'job workers' ? 'Permitted worker IDs' : 'Permitted user IDs')
   for (const value of ['0', '-1', '1.5', '1e3', '0x10', 'NaN', 'Infinity', '12, bad', '9007199254740992']) {
     fireEvent.change(ids, { target: { value } })
-    if (registering) fillWorkerRegistration()
-    else submitJob()
+    submitJob()
     expect(screen.getByRole('alert').textContent).toContain('positive whole-number IDs')
     expect(ids.getAttribute('aria-invalid')).toBe('true')
-    expect(fetchMock.mock.calls.some(([path]) => path === (registering ? '/api/workers' : '/api/jobs/'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([path]) => path === '/api/jobs/')).toBe(false)
   }
   fireEvent.change(ids, { target: { value: '12, 15' } })
-  mockApi(async (path) => path === (registering ? '/api/workers' : '/api/jobs/')
-    ? response(registering ? { ...worker, secret_api_key: 'new-key' } : { id: 42 }) : undefined)
-  if (registering) fillWorkerRegistration()
-  else submitJob()
-  await screen.findByRole('heading', { name: registering ? `${worker.name} registered` : 'Job details' })
+  mockApi(async (path) => path === '/api/jobs/' ? response({ id: 42 }) : undefined)
+  submitJob()
+  await screen.findByRole('heading', { name: 'Job details' })
 })
 
 test.each([
   ['jobs', 'PERMITTED_USERS', 'Permitted user IDs', 'permitted_user_ids', 'Some permitted users do not exist'],
   ['jobs', 'PERMITTED_WORKERS', 'Permitted worker IDs', 'permitted_worker_ids', 'Some permitted workers do not exist'],
-  ['workers', 'PERMITTED_USERS', 'Permitted user IDs', 'permitted_user_ids', 'Some permitted users do not exist'],
+  ['workers', 'PERMITTED_USERS', 'Permitted users', 'permitted_user_ids', 'Some permitted users do not exist'],
 ])('surfaces missing records for %s %s and allows a corrected request', async (resource, policy, label, field, message) => {
   const registering = resource === 'workers'
   await enterApp(`/${resource}/new`)
   if (!registering) fillJob({})
   fireEvent.change(screen.getByLabelText(registering ? 'Visibility policy' : 'Access policy'), { target: { value: policy } })
-  fireEvent.change(screen.getByLabelText(label), { target: { value: '99999' } })
+  if (registering) await selectPermittedUser('maria')
+  else fireEvent.change(screen.getByLabelText(label), { target: { value: '99999' } })
   mockApi(async (path) => path === (registering ? '/api/workers' : '/api/jobs/')
     ? response({ detail: message }, 422) : undefined)
   if (registering) fillWorkerRegistration()
   else submitJob()
   expect((await screen.findByRole('alert')).textContent).toBe(message)
-  expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe('99999')
+  if (registering) expect(screen.getByRole('button', { name: 'Remove maria' })).toBeTruthy()
+  else expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe('99999')
   expect(screen.queryByText(/may have succeeded|may already have been created/)).toBeNull()
   if (!registering) fireEvent.click(screen.getByRole('button', { name: 'Start a new submission' }))
-  fireEvent.change(screen.getByLabelText(label), { target: { value: '12' } })
+  if (registering) {
+    fireEvent.click(screen.getByRole('button', { name: 'Remove maria' }))
+    await selectPermittedUser('alex')
+  } else fireEvent.change(screen.getByLabelText(label), { target: { value: '12' } })
   mockApi(async (path) => path === (registering ? '/api/workers' : '/api/jobs/')
     ? response(registering ? { ...worker, secret_api_key: 'new-key' } : { id: 42 }) : undefined)
   if (registering) fillWorkerRegistration()
@@ -158,13 +159,14 @@ test.each(['jobs', 'workers'])('shows backend grant validation errors beside %s 
   await enterApp(`/${resource}/new`)
   if (!registering) fillJob({})
   fireEvent.change(screen.getByLabelText(registering ? 'Visibility policy' : 'Access policy'), { target: { value: 'PERMITTED_USERS' } })
-  fireEvent.change(screen.getByLabelText('Permitted user IDs'), { target: { value: '12' } })
+  if (registering) await selectPermittedUser('alex')
+  else fireEvent.change(screen.getByLabelText('Permitted user IDs'), { target: { value: '12' } })
   mockApi(async (path) => path === (registering ? '/api/workers' : '/api/jobs/')
     ? response({ detail: [{ loc: ['body', 'permitted_user_ids', 0], msg: 'Invalid user ID', type: 'value_error' }] }, 422) : undefined)
   if (registering) fillWorkerRegistration()
   else submitJob()
   expect((await screen.findByRole('alert')).textContent).toContain('Invalid user ID')
-  expect(screen.getByLabelText('Permitted user IDs').getAttribute('aria-invalid')).toBe('true')
+  expect(screen.getByLabelText(registering ? 'Permitted users' : 'Permitted user IDs').getAttribute('aria-invalid')).toBe('true')
   expect(document.getElementById(registering ? 'worker-user-ids-error' : 'job-user-ids-error')?.textContent).toBe('Invalid user ID')
 })
 

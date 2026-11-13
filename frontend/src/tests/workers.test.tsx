@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { expect, test, vi } from 'vitest'
 import App from '../App'
 import {
-  user, fetchMock, worker, response, fillLogin, enterApp, fillWorkerRegistration, mockApi, setupAppTests,
+  user, fetchMock, worker, response, fillLogin, enterApp, fillWorkerRegistration, selectPermittedUser, mockApi, setupAppTests,
 } from './app-test-utils'
 
 setupAppTests()
@@ -38,6 +38,7 @@ test('opens an accessible worker belonging to another owner without exposing cre
   expect(details.textContent).not.toContain('demo-user (you)')
   expect(details.textContent).not.toContain('never-show-key')
   expect(screen.queryByRole('link', { name: 'Edit worker' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Reissue API key' })).toBeNull()
 })
 
 test('combines worker owner, type, registration status and creation filters before pagination', async () => {
@@ -207,7 +208,8 @@ test('shows inactive credentials and visibility grants without displaying unexpe
   const details = await screen.findByRole('region', { name: 'Worker metadata' })
   expect(details.textContent).toContain('Inactive')
   expect(details.textContent).toContain('Permitted users')
-  expect(details.textContent).toContain('12, 15')
+  await waitFor(() => expect(details.textContent).toContain('alex, maria'))
+  expect(details.textContent).not.toContain('12, 15')
   expect(details.textContent).not.toMatch(/never-show-key|never-show-hash/)
 })
 
@@ -253,9 +255,10 @@ test.each([
   await enterApp('/workers/new')
   expect(screen.getByLabelText('Visibility policy').querySelectorAll('option')).toHaveLength(3)
   fireEvent.change(screen.getByLabelText('Visibility policy'), { target: { value: 'PERMITTED_USERS' } })
-  fireEvent.change(screen.getByLabelText('Permitted user IDs'), { target: { value: '12, 15 12' } })
+  await selectPermittedUser('alex')
+  await selectPermittedUser('maria')
   fireEvent.change(screen.getByLabelText('Visibility policy'), { target: { value: policy } })
-  expect(!!screen.queryByLabelText('Permitted user IDs')).toBe(policy === 'PERMITTED_USERS')
+  expect((screen.getByLabelText('Permitted users') as HTMLInputElement).disabled).toBe(policy !== 'PERMITTED_USERS')
   expect(screen.queryByLabelText('Permitted worker IDs')).toBeNull()
   const description = document.getElementById('worker-policy-help')!.textContent
   expect(description).toContain(`Worker metadata visibility: ${help}`)
@@ -560,4 +563,233 @@ test.each(['navigate', 'logout'])('prevents duplicate edits and cancels pending 
   await act(async () => { resolve(response(worker)) })
   expect(window.location.pathname).toBe(action === 'navigate' ? '/workers' : '/login')
   expect(screen.queryByRole('form', { name: 'Edit worker' })).toBeNull()
+})
+
+test.each(['/workers/new', '/workers/17/edit'])('always shows the user input and enables it explicitly at %s', async (route) => {
+  await enterApp(route)
+  const input = await screen.findByLabelText('Permitted users') as HTMLInputElement
+  expect((screen.getByLabelText('Visibility policy') as HTMLSelectElement).value).toBe('PRIVATE')
+  expect(input.disabled).toBe(true)
+  expect(input.closest('[hidden]')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Add user' }).matches(':disabled')).toBe(true)
+  expect(screen.getByText(/Choose Permitted users as the visibility policy/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Choose permitted users' }))
+  expect((screen.getByLabelText('Visibility policy') as HTMLSelectElement).value).toBe('PERMITTED_USERS')
+  expect(input.disabled).toBe(false)
+  expect(screen.queryByRole('button', { name: 'Choose permitted users' })).toBeNull()
+  await selectPermittedUser('alex')
+  fireEvent.change(input, { target: { value: 'mar' } })
+  for (const policy of ['PRIVATE', 'ALL']) {
+    fireEvent.change(screen.getByLabelText('Visibility policy'), { target: { value: policy } })
+    expect(screen.getByLabelText('Permitted users')).toBe(input)
+    expect(input.disabled).toBe(true)
+    expect(input.value).toBe('mar')
+    expect(screen.getByRole('button', { name: 'Remove alex' }).matches(':disabled')).toBe(true)
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Choose permitted users' }))
+  expect(input.disabled).toBe(false)
+  expect(input.value).toBe('mar')
+  expect(screen.getByRole('button', { name: 'Remove alex' }).matches(':disabled')).toBe(false)
+})
+
+test.each(['register', 'edit'])('uses user tags and username suggestions to %s worker grants', async (mode) => {
+  const editing = mode === 'edit'
+  let saved = false
+  mockApi(async (path, options) => {
+    if (path === '/api/workers/17' && options?.method === 'PUT') { saved = true; return response(worker) }
+    if (path === '/api/workers/17') return response({ ...worker, permission_policy: 'PERMITTED_USERS', permitted_user_ids: saved ? [12] : [15] })
+    if (path === '/api/workers' && options?.method === 'POST') return response({ ...worker, secret_api_key: 'new-key' })
+  })
+  await enterApp(editing ? '/workers/17/edit' : '/workers/new')
+  const form = await screen.findByRole('form', { name: editing ? 'Edit worker' : 'Register a worker' })
+  if (editing) {
+    await waitFor(() => expect(screen.getByRole('list', { name: 'Selected permitted users' }).textContent).toContain('maria'))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove maria' }))
+  } else {
+    fireEvent.change(screen.getByLabelText('Visibility policy'), { target: { value: 'PERMITTED_USERS' } })
+    fireEvent.change(screen.getByLabelText('Worker name'), { target: { value: worker.name } })
+    fireEvent.change(screen.getByLabelText('Supported types'), { target: { value: 'add_numbers' } })
+  }
+  const input = screen.getByLabelText('Permitted users')
+  fireEvent.focus(input)
+  fireEvent.change(input, { target: { value: 'ale' } })
+  const suggestion = await screen.findByRole('option', { name: 'alex Alex Example' })
+  expect(suggestion.textContent).not.toContain('12')
+  expect(fetchMock.mock.calls.some(([path]) => path === '/api/users?limit=10&query=ale')).toBe(true)
+  // Choose the highlighted username with Enter, without entering an ID.
+  fireEvent.keyDown(input, { key: 'Enter' })
+  await waitFor(() => expect(screen.getByRole('list', { name: 'Selected permitted users' }).textContent).toContain('alex'))
+  expect((input as HTMLInputElement).value).toBe('')
+  // Already selected users are excluded from suggestions.
+  fireEvent.change(input, { target: { value: 'alex' } })
+  await screen.findByText('No matching users to add.')
+  expect(screen.queryByRole('option', { name: 'alex Alex Example' })).toBeNull()
+  await selectPermittedUser('maria')
+  expect(within(screen.getByRole('list', { name: 'Selected permitted users' })).getAllByRole('listitem')).toHaveLength(2)
+  fireEvent.keyDown(input, { key: 'Backspace' })
+  expect(screen.queryByRole('button', { name: 'Remove maria' })).toBeNull()
+  fireEvent.submit(form)
+  if (editing) await screen.findByRole('region', { name: 'Worker metadata' })
+  else await screen.findByLabelText('New worker API key')
+  const [, options] = fetchMock.mock.calls.find(([path, options]) => path === (editing ? '/api/workers/17' : '/api/workers')
+    && options?.method === (editing ? 'PUT' : 'POST'))!
+  expect(JSON.parse(String(options?.body))).toMatchObject({ permission_policy: 'PERMITTED_USERS', permitted_user_ids: [12] })
+})
+
+test.each(['/workers/new', '/workers/17/edit'])('requires choosing a username instead of accepting raw IDs at %s', async (route) => {
+  await enterApp(route)
+  const form = await screen.findByRole('form', { name: route.endsWith('/edit') ? 'Edit worker' : 'Register a worker' })
+  fireEvent.click(screen.getByRole('button', { name: 'Choose permitted users' }))
+  if (route.endsWith('/new')) {
+    fireEvent.change(screen.getByLabelText('Worker name'), { target: { value: worker.name } })
+    fireEvent.change(screen.getByLabelText('Supported types'), { target: { value: 'add_numbers' } })
+  }
+  const input = screen.getByRole('combobox', { name: 'Permitted users' })
+  expect((input as HTMLInputElement).placeholder).toBe('Search by username')
+  expect(screen.queryByLabelText('Permitted user IDs')).toBeNull()
+  fireEvent.focus(input)
+  fireEvent.change(input, { target: { value: '12' } })
+  await screen.findByText('No matching users to add.')
+  expect(screen.getByRole('button', { name: 'Add user' }).matches(':disabled')).toBe(true)
+  fireEvent.keyDown(input, { key: 'Enter' })
+  expect(screen.queryByRole('list', { name: 'Selected permitted users' })).toBeNull()
+  fireEvent.submit(form)
+  expect(screen.getByRole('alert').textContent).toContain('Select a user from the suggestions')
+  expect(fetchMock.mock.calls.some(([path, options]) => String(path).startsWith('/api/workers') && ['POST', 'PUT'].includes(options?.method ?? ''))).toBe(false)
+})
+
+test('selects users with arrow keys and Enter and reopens suggestions after Escape', async () => {
+  await enterApp('/workers/new')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose permitted users' }))
+  const input = screen.getByRole('combobox', { name: 'Permitted users' })
+  fireEvent.focus(input)
+  await screen.findByRole('option', { name: 'maria Maria Example' })
+  fireEvent.keyDown(input, { key: 'ArrowDown' })
+  expect(screen.getByRole('option', { name: 'maria Maria Example' }).getAttribute('aria-selected')).toBe('true')
+  fireEvent.keyDown(input, { key: 'Enter' })
+  expect(screen.getByRole('button', { name: 'Remove maria' })).toBeTruthy()
+  fireEvent.keyDown(input, { key: 'Escape' })
+  expect(screen.queryByRole('listbox', { name: 'User suggestions' })).toBeNull()
+  fireEvent.change(input, { target: { value: 'ale' } })
+  fireEvent.click(await screen.findByRole('option', { name: 'alex Alex Example' }))
+  expect(screen.getByRole('button', { name: 'Remove alex' })).toBeTruthy()
+  expect(within(screen.getByRole('list', { name: 'Selected permitted users' })).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['maria', 'alex'])
+})
+
+test('retries failed user searches without discarding selected usernames', async () => {
+  let failed = true
+  mockApi(async (path) => {
+    if (path === '/api/workers/17') return response({ ...worker, permission_policy: 'PERMITTED_USERS', permitted_user_ids: [12] })
+    if (String(path).startsWith('/api/users?') && failed) return response({}, 503)
+  })
+  await enterApp('/workers/17/edit')
+  await screen.findByRole('button', { name: 'Remove alex' })
+  fireEvent.focus(screen.getByRole('combobox', { name: 'Permitted users' }))
+  await screen.findByRole('button', { name: 'Retry user search' })
+  expect(screen.getByRole('button', { name: 'Remove alex' })).toBeTruthy()
+  failed = false
+  fireEvent.click(screen.getByRole('button', { name: 'Retry user search' }))
+  fireEvent.click(await screen.findByRole('option', { name: 'maria Maria Example' }))
+  expect(screen.getByRole('button', { name: 'Remove maria' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Remove alex' })).toBeTruthy()
+})
+
+test('clears all worker user grants and preserves unavailable users until explicitly removed', async () => {
+  mockApi(async (path) => path === '/api/workers/17'
+    ? response({ ...worker, permission_policy: 'PERMITTED_USERS', permitted_user_ids: [999] }) : undefined)
+  await enterApp('/workers/17/edit')
+  const form = await screen.findByRole('form', { name: 'Edit worker' })
+  await screen.findByText('Unavailable user')
+  expect(screen.getByRole('list', { name: 'Selected permitted users' }).textContent).not.toContain('999')
+  fireEvent.click(screen.getByRole('button', { name: 'Remove unavailable user' }))
+  fireEvent.submit(form)
+  await screen.findByRole('region', { name: 'Worker metadata' })
+  const [, options] = fetchMock.mock.calls.find(([, options]) => options?.method === 'PUT')!
+  expect(JSON.parse(String(options?.body)).permitted_user_ids).toEqual([])
+})
+
+test('preserves user tags after rejected worker updates and shows field validation', async () => {
+  mockApi(async (path, options) => {
+    if (path === '/api/workers/17' && options?.method === 'PUT') return response({
+      detail: [{ loc: ['body', 'permitted_user_ids', 0], msg: 'Invalid user ID', type: 'value_error' }],
+    }, 422)
+    if (path === '/api/workers/17') return response({ ...worker, permission_policy: 'PERMITTED_USERS', permitted_user_ids: [12] })
+  })
+  await enterApp('/workers/17/edit')
+  const form = await screen.findByRole('form', { name: 'Edit worker' })
+  fireEvent.submit(form)
+  await screen.findByRole('alert')
+  expect(screen.getByLabelText('Permitted users').getAttribute('aria-invalid')).toBe('true')
+  expect(document.getElementById('worker-user-ids-error')?.textContent).toBe('Invalid user ID')
+  expect(await screen.findByRole('button', { name: 'Remove alex' })).toBeTruthy()
+  expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'PUT')).toHaveLength(1)
+})
+
+test.each(['/workers/17', '/workers/17/edit'])('reissues a worker key with confirmation and one-time display at %s', async (route) => {
+  const secret = 'reissued-worker-key'
+  mockApi(async (path) => path === '/api/workers/17/api-key' ? response({ secret_api_key: secret }) : undefined)
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  const setItem = vi.spyOn(Storage.prototype, 'setItem')
+  await enterApp(route)
+  const reissue = await screen.findByRole('button', { name: 'Reissue API key' })
+  fireEvent.click(reissue)
+  expect(screen.getByText(/old key will stop working immediately/)).toBeTruthy()
+  expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith('/api-key'))).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel reissue' }))
+  expect(screen.queryByRole('region', { name: 'Confirm worker key reissue' })).toBeNull()
+  fireEvent.click(reissue)
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm reissue' }))
+  expect((await screen.findByLabelText('New worker API key')).textContent).toBe(secret)
+  const [, options] = fetchMock.mock.calls.find(([path]) => String(path).endsWith('/api-key'))!
+  expect(options?.method).toBe('POST')
+  expect(new Headers(options?.headers).get('Authorization')).toMatch(/^Bearer /)
+  expect(writeText).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Copy API key' }))
+  await screen.findByText('API key copied. Save it securely.')
+  expect(writeText).toHaveBeenCalledWith(secret)
+  expect(setItem.mock.calls.some((args) => args.some((arg) => String(arg).includes(secret)))).toBe(false)
+  expect(sessionStorage.length).toBe(0)
+  expect(window.location.href).not.toContain(secret)
+  cleanup()
+  render(<App />)
+  await screen.findByRole('button', { name: 'Reissue API key' })
+  expect(screen.queryByLabelText('New worker API key')).toBeNull()
+  expect(fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/api-key'))).toHaveLength(1)
+})
+
+test.each(['network', 'server', 'invalid'])('reports %s key reissue failure without automatic retry', async (failure) => {
+  mockApi(async (path) => {
+    if (path === '/api/workers/17/api-key') {
+      if (failure === 'network') throw new Error('private diagnostics')
+      return failure === 'server' ? response({}, 503) : response({ secret_api_key: '' })
+    }
+  })
+  await enterApp('/workers/17')
+  fireEvent.click(await screen.findByRole('button', { name: 'Reissue API key' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm reissue' }))
+  await screen.findByRole('alert')
+  expect(screen.getByText(/old key may already be invalid/)).toBeTruthy()
+  expect(screen.queryByLabelText('New worker API key')).toBeNull()
+  expect(document.body.textContent).not.toContain('private diagnostics')
+  expect(fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/api-key'))).toHaveLength(1)
+})
+
+test.each(['navigate', 'logout'])('prevents duplicate worker key reissues and cancels on %s', async (action) => {
+  let resolve!: (value: Response) => void
+  mockApi(async (path) => path === '/api/workers/17/api-key'
+    ? new Promise((done) => { resolve = done }) : undefined)
+  await enterApp('/workers/17')
+  fireEvent.click(await screen.findByRole('button', { name: 'Reissue API key' }))
+  const confirm = screen.getByRole('button', { name: 'Confirm reissue' })
+  fireEvent.click(confirm)
+  fireEvent.click(confirm)
+  const requests = fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/api-key'))
+  expect(requests).toHaveLength(1)
+  expect((screen.getByRole('button', { name: 'Reissuing…' }) as HTMLButtonElement).disabled).toBe(true)
+  if (action === 'navigate') fireEvent.click(screen.getByRole('link', { name: 'Back to Workers' }))
+  else fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+  expect(requests[0][1]?.signal?.aborted).toBe(true)
+  await act(async () => { resolve(response({ secret_api_key: 'late-secret' })) })
+  expect(document.body.textContent).not.toContain('late-secret')
 })
