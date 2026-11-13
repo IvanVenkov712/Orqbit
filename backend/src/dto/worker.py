@@ -5,10 +5,11 @@ from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 from models.worker import PermissionPolicy
 
 
-class WorkerSupportedTypesUpdate(BaseModel):
+class WorkerUpdate(BaseModel):
     supported_types: set[
         Annotated[str, Field(min_length=1, max_length=100, pattern=r"\S")]
     ] = Field(min_length=1)
+    permission_policy: PermissionPolicy | None = None
 
 
 class WorkerAPIKeyResponse(BaseModel):

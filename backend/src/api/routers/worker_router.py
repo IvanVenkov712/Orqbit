@@ -11,7 +11,7 @@ from dto.worker import (
     WorkerCreate,
     WorkerCreateResponse,
     WorkerRead,
-    WorkerSupportedTypesUpdate,
+    WorkerUpdate,
 )
 from models.supported_types import SupportedJobType
 from models.user import User
@@ -24,12 +24,12 @@ from services.worker import (
     accessible_workers_query,
     get_owned_worker,
     reissue_worker_api_key,
-    update_worker_supported_types,
     worker_accessible,
     worker_read_from_worker,
 )
 from services.worker import create_worker as create_worker_service
 from services.worker import delete_worker as delete_worker_service
+from services.worker import update_worker as update_worker_service
 
 worker_router = APIRouter()
 
@@ -136,17 +136,17 @@ def get_worker(worker_id: int, session: SessionDep, user: CurrentUser):
     return worker_read_from_worker(worker)
 
 
-@worker_router.put("/workers/{worker_id}/supported-types", response_model=WorkerRead)
-def update_supported_types(
+@worker_router.put("/workers/{worker_id}", response_model=WorkerRead)
+def update_worker(
     worker_id: int,
-    payload: WorkerSupportedTypesUpdate,
+    payload: WorkerUpdate,
     session: SessionDep,
     user: CurrentUser,
 ):
     worker = get_owned_worker(worker_id, session, user)
     if worker is None:
         raise HTTPException(404, "Worker not found")
-    return update_worker_supported_types(session, worker, payload)
+    return update_worker_service(session, worker, payload)
 
 
 @worker_router.post("/workers/{worker_id}/api-key", response_model=WorkerAPIKeyResponse)

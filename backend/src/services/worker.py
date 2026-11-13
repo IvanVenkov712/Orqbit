@@ -7,7 +7,7 @@ from dto.worker import (
     WorkerCreate,
     WorkerCreateResponse,
     WorkerRead,
-    WorkerSupportedTypesUpdate,
+    WorkerUpdate,
 )
 from models.supported_types import SupportedJobType
 from models.user import User
@@ -35,8 +35,8 @@ def get_owned_worker(worker_id: int, session: Session, user: User) -> Worker | N
     )
 
 
-def update_worker_supported_types(
-    session: Session, worker: Worker, payload: WorkerSupportedTypesUpdate
+def update_worker(
+    session: Session, worker: Worker, payload: WorkerUpdate
 ) -> WorkerRead:
     existing_types = {supported_type.type_name for supported_type in worker.supported_types}
     worker.supported_types = [
@@ -47,6 +47,8 @@ def update_worker_supported_types(
         SupportedJobType(type_name=job_type)
         for job_type in payload.supported_types - existing_types
     ]
+    if payload.permission_policy is not None:
+        worker.permission_policy = payload.permission_policy
     session.commit()
     return worker_read_from_worker(worker)
 

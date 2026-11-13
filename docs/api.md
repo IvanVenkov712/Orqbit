@@ -168,7 +168,7 @@ The [quickstart](quickstart.md) provides executable registration/login and job-s
 | POST | `/workers` | JSON: `name`, `supported_types`, `permission_policy`; optional `permitted_user_ids` | Worker metadata plus `secret_api_key` |
 | GET | `/workers` | Optional `owner_username`, `owner_id`, `job_type`, `active`, `created_from`, `created_before`, `limit`, `offset`, `sort` | Accessible workers, newest ID first by default |
 | GET | `/workers/{worker_id}` | Worker ID | Accessible worker, or 404 |
-| PUT | `/workers/{worker_id}/supported-types` | JSON: `supported_types` | Updated worker metadata |
+| PUT | `/workers/{worker_id}` | JSON: `supported_types`; optional `permission_policy` | Updated worker metadata |
 | POST | `/workers/{worker_id}/api-key` | No body | `{"secret_api_key":"oqb_..."}` |
 | DELETE | `/workers/{worker_id}` | Worker ID | 204 No Content |
 
@@ -180,13 +180,13 @@ Worker sorting accepts `created_asc`/`created_desc`, `name_asc`/`name_desc`, `ow
 
 Worker visibility policies are `PRIVATE` (owner only), `PERMITTED_USERS` (owner plus listed users), and `ALL` (all authenticated users). Visibility lets users inspect metadata; it does not reveal the API key or let them claim as that worker. Claims use the worker owner's job permissions plus explicit worker grants.
 
-Worker metadata contains `id`, `name`, `active`, `user_id`, `owner_username`, `permission_policy`, `supported_types`, and `permitted_user_ids`. The raw API key is returned only by creation or reissue; store it for the independent worker. Reads/lists and type updates omit it, and PostgreSQL stores its SHA-256 hash. Worker names are globally unique.
+Worker metadata contains `id`, `name`, `active`, `user_id`, `owner_username`, `permission_policy`, `supported_types`, and `permitted_user_ids`. The raw API key is returned only by creation or reissue; store it for the independent worker. Reads/lists and worker updates omit it, and PostgreSQL stores its SHA-256 hash. Worker names are globally unique.
 
 ### Worker management
 
-Updating types, reissuing keys, and deleting workers require the owner's user bearer token. Visibility grants do not allow these operations. A missing worker or a worker owned by another user returns 404 (`Worker not found`); missing user authentication returns 401.
+Updating types or visibility policy, reissuing keys, and deleting workers require the owner's user bearer token. Visibility grants do not allow these operations. A missing worker or a worker owned by another user returns 404 (`Worker not found`); missing user authentication returns 401.
 
-`PUT /workers/{worker_id}/supported-types` replaces the entire supported set, for example `{"supported_types":["send_email","generate_report"]}`. The same nonempty-set and type-name validation as registration applies, including deduplication; invalid input returns 422 without changing the worker. New claims use the updated capabilities. Existing attempts and other worker metadata are unchanged.
+`PUT /workers/{worker_id}` replaces the entire supported set and optionally updates the worker's visibility policy, for example `{"supported_types":["send_email","generate_report"],"permission_policy":"ALL"}`. `supported_types` is required; omitting `permission_policy` or passing `null` preserves the current policy. Accepted policies are `PRIVATE`, `PERMITTED_USERS`, and `ALL`. The same nonempty-set and type-name validation as registration applies, including deduplication; invalid input returns 422 without changing the worker. Both changes commit together. New claims use the updated capabilities. Existing attempts, permitted-user grants, and other worker metadata are unchanged. This replaces `/workers/{worker_id}/supported-types`; clients must use the new URL.
 
 `POST /workers/{worker_id}/api-key` generates a new key for the existing worker and returns only `secret_api_key`. After the change commits, subsequent authentication with the old key returns 401. Update the independent worker's configuration to use the new key for claims, heartbeats, and outcomes. Reissue preserves worker identity, capabilities, attempts, and active status; it does not reactivate an inactive worker. Requests already authenticated before reissue may finish.
 

@@ -354,8 +354,9 @@ def test_worker_registration_requires_user_authentication(client, database):
         assert session.scalar(select(func.count()).select_from(Worker)) == 0
 
 
+@pytest.mark.parametrize("policy_fields", [{}, {"permission_policy": None}])
 def test_update_worker_types_replaces_capabilities_and_changes_claim_eligibility(
-    client, database, user_headers, job_factory
+    client, database, user_headers, job_factory, policy_fields
 ):
     created = client.post("/workers", headers=user_headers, json={
         "name": "managed-worker",
@@ -370,10 +371,11 @@ def test_update_worker_types_replaces_capabilities_and_changes_claim_eligibility
         session.commit()
         removed_id, added_id = removed_job.id, added_job.id
 
-    path = f"/workers/{created['id']}/supported-types"
+    path = f"/workers/{created['id']}"
     for _ in range(2):
         response = client.put(path, headers=user_headers, json={
             "supported_types": ["retained", "new", "new"],
+            **policy_fields,
         })
         assert response.status_code == 200
         updated = response.json()
@@ -393,21 +395,62 @@ def test_update_worker_types_replaces_capabilities_and_changes_claim_eligibility
         assert session.get(Job, removed_id).status == JobStatus.PENDING
 
 
+@pytest.mark.parametrize("policy", list(PermissionPolicy))
+def test_update_worker_changes_policy_and_types_and_preserves_other_metadata(
+    client, database, user, user_headers, claim_worker, policy
+):
+    worker, key_headers = claim_worker
+    with Session(database) as session:
+        stored = session.get(Worker, worker.id)
+        stored.name = "managed-worker"
+        stored.permission_policy = (
+            PermissionPolicy.ALL if policy == PermissionPolicy.PRIVATE
+            else PermissionPolicy.PRIVATE
+        )
+        stored.permitted_users = [session.get(User, user.id)]
+        session.commit()
+    path = f"/workers/{worker.id}"
+    original = client.get(path, headers=user_headers).json()
+
+    for _ in range(2):
+        response = client.put(path, headers=user_headers, json={
+            "supported_types": ["updated", "updated"],
+            "permission_policy": policy.value,
+        })
+        assert response.status_code == 200
+        assert response.json() == {
+            **original, "supported_types": ["updated"], "permission_policy": policy.value,
+        }
+        assert client.get(path, headers=user_headers).json() == response.json()
+
+    with Session(database) as session:
+        stored = session.get(Worker, worker.id)
+        assert stored.permission_policy == policy
+        assert {t.type_name for t in stored.supported_types} == {"updated"}
+        assert stored.secret_api_key_hash == hash_api_key(key_headers["X-API-Key"])
+        assert [u.id for u in stored.permitted_users] == [user.id]
+
+
 @pytest.mark.parametrize("payload", [
     {}, {"supported_types": []}, {"supported_types": [""]},
     {"supported_types": [" \t"]}, {"supported_types": ["a" * 101]},
     {"supported_types": [None]}, {"supported_types": [123]},
+    {"supported_types": ["new"], "permission_policy": "unknown"},
+    {"supported_types": ["new"], "permission_policy": 123},
+    {"supported_types": [], "permission_policy": "PRIVATE"},
 ])
-def test_update_worker_types_rejects_invalid_payload_without_changes(
+def test_update_worker_rejects_invalid_payload_without_changes(
     client, database, claim_worker, user_headers, payload
 ):
     worker, _ = claim_worker
     response = client.put(
-        f"/workers/{worker.id}/supported-types", headers=user_headers, json=payload,
+        f"/workers/{worker.id}", headers=user_headers, json=payload,
     )
     assert response.status_code == 422
     with Session(database) as session:
-        assert {t.type_name for t in session.get(Worker, worker.id).supported_types} == {
+        stored = session.get(Worker, worker.id)
+        assert stored.permission_policy == worker.permission_policy
+        assert {t.type_name for t in stored.supported_types} == {
             "example"
         }
 
@@ -476,7 +519,7 @@ def test_reissuing_worker_key_does_not_reactivate_inactive_worker(
 
 
 @pytest.mark.parametrize("method, suffix, payload", [
-    ("PUT", "/supported-types", {"supported_types": ["new"]}),
+    ("PUT", "", {"supported_types": ["new"], "permission_policy": "PRIVATE"}),
     ("POST", "/api-key", None),
     ("DELETE", "", None),
 ])
@@ -504,6 +547,7 @@ def test_worker_management_requires_owner_and_does_not_change_rejected_workers(
             headers = {} if access == "anonymous" else worker_headers
         session.commit()
         original_owner = stored.user_id
+        original_policy = stored.permission_policy
 
     response = client.request(
         method, f"/workers/{worker_id}{suffix}", headers=headers, json=payload,
@@ -516,6 +560,7 @@ def test_worker_management_requires_owner_and_does_not_change_rejected_workers(
         stored = session.get(Worker, worker.id)
         assert stored is not None
         assert stored.user_id == original_owner
+        assert stored.permission_policy == original_policy
         assert stored.secret_api_key_hash == worker.secret_api_key_hash
         assert {t.type_name for t in stored.supported_types} == {"example"}
 
