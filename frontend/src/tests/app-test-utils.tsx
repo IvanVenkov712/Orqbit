@@ -16,6 +16,7 @@ export const worker = {
 export const job = {
   id: 42, user_id: user.id, owner_username: user.username, job_type: 'add_numbers', status: 'SUCCEEDED',
   params: { numbers: [2, 3, 5] }, result: { sum: 10 }, error: null,
+  attempts_count: 1, max_attempts: 3, available_at: '2026-11-10T08:00:00Z',
   created_at: '2026-11-10T08:00:00Z', updated_at: '2026-11-10T09:30:00Z',
 }
 export const attempt = {

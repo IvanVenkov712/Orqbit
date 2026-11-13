@@ -15,6 +15,9 @@ type Job = {
   params: Record<string, unknown>
   result: Record<string, unknown> | null
   error: Record<string, unknown> | null
+  attempts_count: number
+  max_attempts: number
+  available_at: string
 }
 
 type Attempt = {
@@ -67,6 +70,7 @@ export function JobDetailsPage({ history = false }: { history?: boolean }) {
 
   const { job, attempts = [], attemptsError } = details.data ?? {}
   const unavailable = !validId || (details.error instanceof ApiError && [403, 404].includes(details.error.status ?? 0))
+  const awaitingRetry = job?.status === 'PENDING' && job.attempts_count > 0 && job.attempts_count < job.max_attempts
 
   function changePage(nextOffset: number) {
     const next = new URLSearchParams(searchParams)
@@ -97,7 +101,15 @@ export function JobDetailsPage({ history = false }: { history?: boolean }) {
           <div><dt>Job</dt><dd>#{job.id}</dd></div>
           <div><dt>Creator</dt><dd>{job.owner_username}{job.user_id === user?.id ? ' (you)' : ''}</dd></div>
           <div><dt>Type</dt><dd>{job.job_type}</dd></div>
+          <div><dt>Attempts used</dt><dd>{job.attempts_count} of {job.max_attempts}</dd></div>
+          {awaitingRetry && <div><dt>Retry eligible from</dt><dd>
+            <time dateTime={job.available_at}>{new Date(job.available_at).toLocaleString(undefined, { timeZoneName: 'short' })}</time>
+          </dd></div>}
         </dl>
+        {awaitingRetry && <p>This job is waiting to be retried. A compatible worker can claim it at or after the eligibility time; execution may start later.</p>}
+        {job.status === 'FAILED' && job.error?.code === 'attempts_exhausted' && <p>
+          The execution lease expired and all allowed attempts have been used. This job failed and will not be retried automatically.
+        </p>}
       </section>
       <section className={styles.placeholder} aria-label="Parameters">
         <h2>Parameters</h2>

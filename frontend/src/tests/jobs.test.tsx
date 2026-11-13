@@ -409,6 +409,58 @@ test('shows a failed job and its attempt error as text', async () => {
   expect(document.querySelector('main script')).toBeNull()
 })
 
+test.each(['2020-01-01T08:00:00Z', '2099-01-01T08:00:00Z'])('shows retry eligibility without promising a start time (%s)', async (availableAt) => {
+  mockApi(async (path) => {
+    if (path === '/api/jobs/42') return response({ ...job, status: 'PENDING', result: null, available_at: availableAt })
+    if (String(path).includes('/attempts?')) return response([{ ...attempt, status: 'LOST', result: null }])
+  })
+  await enterApp('/jobs/42')
+  const overview = await screen.findByRole('region', { name: 'Job overview' })
+  expect(within(overview).getByRole('status').textContent).toBe('Pending')
+  expect(within(overview).getByText('Attempts used')).toBeTruthy()
+  expect(within(overview).getByText('1 of 3')).toBeTruthy()
+  expect(within(overview).getByText('Retry eligible from')).toBeTruthy()
+  const time = overview.querySelector('time')
+  expect(time?.dateTime).toBe(availableAt)
+  expect(time?.textContent).toBe(new Date(availableAt).toLocaleString(undefined, { timeZoneName: 'short' }))
+  expect(overview.textContent).toContain('This job is waiting to be retried.')
+  expect(overview.textContent).toContain('A compatible worker can claim it at or after the eligibility time; execution may start later.')
+})
+
+test.each([
+  { status: 'PENDING', attemptsCount: 0, error: null },
+  { status: 'RUNNING', attemptsCount: 3, error: null },
+  { status: 'SUCCEEDED', attemptsCount: 3, error: null },
+  { status: 'FAILED', attemptsCount: 3, error: { code: 'INVALID_PARAMS' } },
+])('shows attempt usage without retry messages for $status with $attemptsCount attempts', async ({ status, attemptsCount, error }) => {
+  mockApi(async (path) => path === '/api/jobs/42'
+    ? response({ ...job, status, attempts_count: attemptsCount, error }) : undefined)
+  await enterApp('/jobs/42')
+  const overview = await screen.findByRole('region', { name: 'Job overview' })
+  expect(within(overview).getByText(`${attemptsCount} of 3`)).toBeTruthy()
+  expect(within(overview).queryByText('Retry eligible from')).toBeNull()
+  expect(overview.textContent).not.toContain('waiting to be retried')
+  expect(overview.textContent).not.toContain('all allowed attempts have been used')
+})
+
+test.each([1, 3])('explains lease-expiry exhaustion with %s allowed attempts even if history fails', async (maxAttempts) => {
+  const error = { code: 'attempts_exhausted', message: 'Maximum attempts reached after lease expiry' }
+  mockApi(async (path) => {
+    if (path === '/api/jobs/42') return response({
+      ...job, status: 'FAILED', result: null, error, attempts_count: maxAttempts, max_attempts: maxAttempts,
+    })
+    if (String(path).includes('/attempts?')) return response({}, 503)
+  })
+  await enterApp('/jobs/42')
+  const overview = await screen.findByRole('region', { name: 'Job overview' })
+  expect(within(overview).getByRole('status').textContent).toBe('Failed')
+  expect(within(overview).getByText(`${maxAttempts} of ${maxAttempts}`)).toBeTruthy()
+  expect(overview.textContent).toContain('The execution lease expired and all allowed attempts have been used.')
+  expect(overview.textContent).toContain('This job failed and will not be retried automatically.')
+  expect(within(overview).queryByText('Retry eligible from')).toBeNull()
+  expect(screen.getByRole('alert')).toBeTruthy()
+})
+
 test.each([403, 404])('shows an unavailable state for an inaccessible or missing job (HTTP %s)', async (status) => {
   localStorage.setItem(storageKey, token())
   fetchMock.mockImplementation(async (path) => path === '/api/users/me/' ? response(user) : response({ detail: 'Job not found' }, status))
@@ -528,6 +580,45 @@ test.each(['SUCCEEDED', 'FAILED'])('polls pending/running jobs and history, fetc
   await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
   expect(fetchMock).toHaveBeenCalledTimes(calls)
   expect(fetchMock.mock.calls.slice(1).map(([path]) => path)).toEqual(Array.from({ length: 3 }, () => ['/api/jobs/42', '/api/jobs/42/attempts?limit=1&offset=0']).flat())
+})
+
+test('refreshes retry usage and history on reassignment and clears retry information when running', async () => {
+  vi.useFakeTimers()
+  localStorage.setItem(storageKey, token())
+  window.history.replaceState(null, '', '/jobs/42')
+  let status = 'PENDING'
+  mockApi(async (path) => {
+    const attemptsCount = status === 'PENDING' ? 1 : 2
+    if (path === '/api/jobs/42') return response({
+      ...job, status, attempts_count: attemptsCount, result: status === 'SUCCEEDED' ? job.result : null,
+    })
+    if (String(path).includes('/attempts?')) return response([{
+      ...attempt, id: status === 'PENDING' ? attempt.id : 20, attempt_number: attemptsCount,
+      status: status === 'PENDING' ? 'LOST' : status, result: status === 'SUCCEEDED' ? job.result : null,
+    }])
+  })
+  await act(async () => { render(<App />) })
+  await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+  const overview = screen.getByRole('region', { name: 'Job overview' })
+  expect(within(overview).getByText('1 of 3')).toBeTruthy()
+  expect(within(overview).getByText('Retry eligible from')).toBeTruthy()
+  expect(screen.getByRole('article', { name: 'Attempt 1' }).textContent).toContain('Lost')
+  status = 'RUNNING'
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+  expect(within(overview).getByText('2 of 3')).toBeTruthy()
+  expect(within(overview).getByRole('status').textContent).toBe('Running')
+  expect(within(overview).queryByText('Retry eligible from')).toBeNull()
+  expect(overview.textContent).not.toContain('waiting to be retried')
+  expect(screen.getByRole('article', { name: 'Attempt 2' }).textContent).toContain('Running')
+  expect(screen.queryByRole('article', { name: 'Attempt 1' })).toBeNull()
+  status = 'SUCCEEDED'
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+  expect(within(overview).getByRole('status').textContent).toBe('Succeeded')
+  expect(within(overview).getByText('2 of 3')).toBeTruthy()
+  expect(screen.getByRole('article', { name: 'Attempt 2' }).textContent).toContain('"sum": 10')
+  const calls = fetchMock.mock.calls.length
+  await act(async () => { await vi.advanceTimersByTimeAsync(9000) })
+  expect(fetchMock).toHaveBeenCalledTimes(calls)
 })
 
 test('pauses polling in a hidden tab, resumes when visible, and cancels on navigation', async () => {

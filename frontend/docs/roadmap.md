@@ -4,10 +4,9 @@ The current interface includes the sidebar layout, nested parameter editor, acce
 
 ## 1. Retry visibility
 
-- Show `attempts_count`, `max_attempts`, and `available_at` on job details.
-- Explain when a pending job is waiting for its retry time and when its attempt budget is exhausted.
-- Make transitions between running, retry-waiting, and terminal states clear without adding new API statuses or client-side retry controls.
-- Verify polling and attempt-history refresh across reassignment and final outcomes.
+Implemented: job details show attempts used out of the saved limit, the earliest retry claim time for pending retries (with a timezone and no promised execution start), and an explanation when lease expiry exhausts the attempt budget. Existing statuses and retry policies are unchanged. Frontend tests cover polling and latest-attempt refresh across reassignment and completion.
+
+- Verify the complete retry flow against the real backend and an independent worker, including exhausted attempts.
 
 ## 2. Usability and accessibility follow-up
 
